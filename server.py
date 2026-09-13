@@ -197,22 +197,6 @@ app = FastAPI(
 )
 
 
-@app.middleware("http")
-async def vercel_rewrite_middleware(request: Request, call_next):
-    if request.headers.get("x-debug-headers"):
-        return JSONResponse({
-            "scope_keys": list(request.scope.keys()),
-            "scope_dump": {k: str(v) for k, v in request.scope.items() if k not in ("headers", "app")},
-            "url": str(request.url),
-            "url_path": request.url.path,
-        })
-    matched_path = request.headers.get("x-matched-path")
-    if matched_path and matched_path not in ("/api/index.py", "/api/index"):
-        request.scope["path"] = matched_path
-    elif request.scope.get("path") in ("/api/index.py", "/api/index"):
-        request.scope["path"] = "/"
-    return await call_next(request)
-
 
 
 # ---------------------------------------------------------------------------
@@ -808,8 +792,6 @@ setInterval(() => {
 @app.get("/", response_class=HTMLResponse)
 @app.get("/dashboard", response_class=HTMLResponse)
 @app.get("/web", response_class=HTMLResponse)
-@app.get("/api/index.py", response_class=HTMLResponse, include_in_schema=False)
-@app.get("/api/index", response_class=HTMLResponse, include_in_schema=False)
 def web_dashboard():
     """Serves the live interactive dashboard."""
     return HTMLResponse(content=DASHBOARD_HTML)
