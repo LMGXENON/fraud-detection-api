@@ -543,7 +543,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
           <h2>Live Scored Feed</h2>
-          <span style="font-size: 12px; color: var(--text-muted);">Auto-updating every 2s</span>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <button type="button" class="btn-secondary" style="font-size: 11px; padding: 4px 8px;" onclick="resetSession()">Reset Counters</button>
+            <span style="font-size: 12px; color: var(--text-muted);">Real-Time Stream</span>
+          </div>
         </div>
         <table>
           <thead>
@@ -665,47 +668,100 @@ function getSamplePayload() {
 // Initial sample load
 fetchSample('normal');
 
-async function updateStats() {
-  try {
-    const res = await fetch('/api/stats');
-    if (!res.ok) return;
-    const data = await res.json();
-    document.getElementById('stat-total').innerText = data.total_scored;
-    document.getElementById('stat-approved').innerText = data.approved_transactions;
-    document.getElementById('stat-flagged').innerText = data.flagged_transactions;
-    document.getElementById('stat-flagrate').innerText = data.flag_rate_percent + '%';
-  } catch (e) {}
+// Monotonic Session State (Prevents serverless multi-worker jitter and number jumping)
+let sessionTotal = 0;
+let sessionApproved = 0;
+let sessionFlagged = 0;
+let sessionTransactions = [];
+
+function recordTransaction(data) {
+  sessionTotal++;
+  if (data.flagged) {
+    sessionFlagged++;
+  } else {
+    sessionApproved++;
+  }
+
+  // Prepend to history table
+  sessionTransactions.unshift({
+    id: sessionTotal,
+    amount: data.amount,
+    ground_truth: data.ground_truth,
+    flagged: data.flagged,
+    risk_score: data.risk_score
+  });
+  if (sessionTransactions.length > 50) sessionTransactions.pop();
+
+  renderStats();
+  renderHistory();
 }
 
-async function updateHistory() {
-  try {
-    const res = await fetch('/api/history?limit=8');
-    if (!res.ok) return;
-    const rows = await res.json();
-    const tbody = document.getElementById('historyTable');
-    if (!rows.length) {
-      tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No transactions scored yet.</td></tr>';
-      return;
+function renderStats() {
+  document.getElementById('stat-total').innerText = sessionTotal;
+  document.getElementById('stat-approved').innerText = sessionApproved;
+  document.getElementById('stat-flagged').innerText = sessionFlagged;
+  const rate = sessionTotal > 0 ? ((sessionFlagged / sessionTotal) * 100).toFixed(1) : '0.0';
+  document.getElementById('stat-flagrate').innerText = rate + '%';
+}
+
+function renderHistory() {
+  const tbody = document.getElementById('historyTable');
+  if (!sessionTransactions.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No transactions scored yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sessionTransactions.slice(0, 10).map(r => {
+    let gtBadge = '<span style="color: var(--text-muted); font-size: 11px;">Unlabeled</span>';
+    if (r.ground_truth === 1) {
+      gtBadge = '<span class="status-pill flagged">FRAUD (1)</span>';
+    } else if (r.ground_truth === 0) {
+      gtBadge = '<span class="status-pill approved">NORMAL (0)</span>';
     }
-    tbody.innerHTML = rows.map(r => {
-      let gtBadge = '<span style="color: var(--text-muted); font-size: 11px;">Unlabeled</span>';
-      if (r.ground_truth === 1) {
-        gtBadge = '<span class="status-pill flagged">FRAUD (1)</span>';
-      } else if (r.ground_truth === 0) {
-        gtBadge = '<span class="status-pill approved">NORMAL (0)</span>';
+    return `
+      <tr>
+        <td>#${r.id}</td>
+        <td>$${Number(r.amount).toFixed(2)}</td>
+        <td>${gtBadge}</td>
+        <td><span class="status-pill ${r.flagged ? 'flagged' : 'approved'}">${r.flagged ? 'FLAGGED' : 'APPROVED'}</span></td>
+        <td><strong>${Number(r.risk_score).toFixed(3)}</strong></td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function resetSession() {
+  sessionTotal = 0;
+  sessionApproved = 0;
+  sessionFlagged = 0;
+  sessionTransactions = [];
+  renderStats();
+  renderHistory();
+}
+
+// Seed initial history once on page load without continuous polling overwrite
+async function initSession() {
+  try {
+    const sRes = await fetch('/api/stats');
+    if (sRes.ok) {
+      const data = await sRes.json();
+      if (sessionTotal === 0 && data.total_scored > 0) {
+        sessionTotal = data.total_scored;
+        sessionApproved = data.approved_transactions;
+        sessionFlagged = data.flagged_transactions;
+        renderStats();
       }
-      return `
-        <tr>
-          <td>#${r.id}</td>
-          <td>$${Number(r.amount).toFixed(2)}</td>
-          <td>${gtBadge}</td>
-          <td><span class="status-pill ${r.flagged ? 'flagged' : 'approved'}">${r.flagged ? 'FLAGGED' : 'APPROVED'}</span></td>
-          <td><strong>${Number(r.risk_score).toFixed(3)}</strong></td>
-        </tr>
-      `;
-    }).join('');
+    }
+    const hRes = await fetch('/api/history?limit=10');
+    if (hRes.ok) {
+      const rows = await hRes.json();
+      if (sessionTransactions.length === 0 && rows.length > 0) {
+        sessionTransactions = rows;
+        renderHistory();
+      }
+    }
   } catch (e) {}
 }
+initSession();
 
 async function submitTransaction(e) {
   e.preventDefault();
@@ -754,8 +810,7 @@ async function submitTransaction(e) {
     const gtText = data.ground_truth === 1 ? 'Kaggle Verified Fraud' : (data.ground_truth === 0 ? 'Kaggle Verified Normal' : 'Custom');
     detailsEl.innerText = `Tx #${data.transaction_id} | Amount: $${Number(data.amount).toFixed(2)} | Ground Truth: ${gtText}`;
 
-    updateStats();
-    updateHistory();
+    recordTransaction(data);
   } catch (err) {
     alert('Failed to connect to API server.');
   }
@@ -790,7 +845,7 @@ function toggleStream() {
           sample = isFraud ? FALLBACK_FRAUD : FALLBACK_NORMAL;
         }
         
-        await fetch('/api/score', {
+        const res = await fetch('/api/score', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -799,9 +854,10 @@ function toggleStream() {
             ground_truth: sample.is_fraud !== undefined ? sample.is_fraud : (isFraud ? 1 : 0)
           })
         });
-        
-        updateStats();
-        updateHistory();
+        if (res.ok) {
+          const data = await res.json();
+          recordTransaction(data);
+        }
       } catch (err) {}
     }, delay);
   }
@@ -824,16 +880,6 @@ async function callEndpoint(url, method, body=null) {
     out.innerText = 'Error calling endpoint: ' + err.message;
   }
 }
-
-// Initial polling
-updateStats();
-updateHistory();
-setInterval(() => {
-  if (!isStreaming) {
-    updateStats();
-    updateHistory();
-  }
-}, 2000);
 </script>
 
 </body>
