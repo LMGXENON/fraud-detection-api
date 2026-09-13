@@ -1,47 +1,53 @@
-# 🛡️ FraudGuard
+# FraudGuard
 
-> Real-time financial transaction fraud scoring API trained on the official **[Kaggle Credit Card Fraud Dataset](https://www.kaggle.com/mlg-ulb/creditcardfraud)** (`creditcard.csv`). Powered by an unsupervised **Isolation Forest** and served via **FastAPI** with continuous stream simulation.
-
----
-
-## 🎯 30-Second Elevator Pitch (For Interviews)
-
-> *"FraudGuard is an event-driven, real-time transaction risk scoring API modeled after Stripe Radar. It scores incoming payments against an unsupervised Isolation Forest model trained on 284,000+ real transactions from the Kaggle Credit Card dataset, served through FastAPI with sub-millisecond inference latency, persistent SQLite audit logging, and a live payment gateway stream simulator."*
+Real-time transaction risk scoring service trained on the Kaggle Credit Card Fraud benchmark dataset (`creditcard.csv`). Powered by an unsupervised Isolation Forest model and served via FastAPI with SQLite persistence and a live web dashboard.
 
 ---
 
-## 📁 Which File Does What?
+## Dataset Overview
 
-| File | Exact Responsibility |
-| :--- | :--- |
-| **`creditcard.csv`** | Official Kaggle dataset: 284,807 real European cardholder transactions, 30 features (`Time`, `V1`–`V28`, `Amount`), and 492 confirmed fraud cases. |
-| **`model.py`** | Contains the pure-Python **`FastIsolationForest`** and **`IsolationTree`** anomaly detection algorithms. Zero binary dependencies, instant execution. |
-| **`train.py`** | Subsamples normal transactions from `creditcard.csv`, fits the Isolation Forest model on normal behavior, evaluates recall on real fraud, and exports `model.pkl` in ~7 seconds. |
-| **`server.py`** | Production-ready **FastAPI** REST microservice. Loads `model.pkl` at startup, validates incoming payloads via Pydantic, evaluates risk scores, and writes to SQLite. |
-| **`simulator.py`** | Acts as an external payment processor (like Stripe/Shopify). Replays real rows from `creditcard.csv` and contrasts **Kaggle Ground Truth** with the **Live Model Prediction** in real time. |
-| **`test_app.py`** | Automated end-to-end test suite using FastAPI's `TestClient` verifying training, API routes, scoring differentiation, and database persistence. |
-| **`fraudguard.db`** | Local SQLite database providing a persistent audit log of every scored transaction with timestamps and decision flags. |
+FraudGuard is trained on the Credit Card Fraud detection benchmark from Kaggle:
+- Total Transactions: 284,807 recorded over two days.
+- Normal Transactions: 284,315 (99.83%).
+- Confirmed Fraud Cases: 492 (0.17%).
+- Features: 30 numerical variables (`Time`, `V1` through `V28` PCA components, and `Amount`).
+- Ground Truth (`Class`): 0 for legitimate transactions, 1 for confirmed fraud.
 
 ---
 
-## 🚀 3-Step Quickstart Guide
+## Project Structure
 
-### 1. Set Up Environment & Dependencies
+```text
+fraud-detection-api/
+│
+├── creditcard.csv        # Kaggle benchmark dataset (284,807 rows, ~144 MB)
+├── model.py              # Pure-Python FastIsolationForest anomaly detection algorithm
+├── train.py              # Model training pipeline and threshold calibration (~7s)
+├── server.py             # FastAPI service with /score, /history, /stats, and Web Dashboard
+├── simulator.py          # Streaming simulator replaying Kaggle dataset transactions
+├── test_app.py           # Automated end-to-end test suite
+├── requirements.txt      # Python dependencies
+└── README.md
+```
+
+---
+
+## Quickstart Guide
+
+### 1. Install Dependencies
 ```bash
-# Activate your virtual environment
 source venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
 ---
 
-### 2. Train the Model on `creditcard.csv`
+### 2. Train the Model
 ```bash
 python3 train.py
 ```
-*Output (takes ~7 seconds):*
+
+Expected output:
 ```text
 =================================================================
   FraudGuard - Isolation Forest Training on Kaggle Dataset
@@ -61,54 +67,62 @@ Model Evaluation against Real Kaggle Ground Truth:
 Recommended Flag Threshold : 0.58
 Fraud Detection Recall     : 56.3% (277/492 fraud cases flagged)
 
-✓ Trained model saved to 'model.pkl'
+Trained model saved to 'model.pkl'
 =================================================================
 ```
 
 ---
 
-### 3. Run the API Server & Real-Time Simulator
+### 3. Run the Service and Web Dashboard
 
-**Terminal 1 — Start the FastAPI Service:**
+Start the FastAPI application:
 ```bash
 python3 -m uvicorn server:app --port 8000
 ```
-- **Interactive Swagger UI:** [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-- **Health Check:** [http://127.0.0.1:8000/](http://127.0.0.1:8000/)
 
-**Terminal 2 — Start the Live Payment Feed:**
+- Web Dashboard: http://127.0.0.1:8000/
+- Interactive API Documentation (Swagger UI): http://127.0.0.1:8000/docs
+- Alternative API Documentation (ReDoc): http://127.0.0.1:8000/redoc
+
+---
+
+### 4. Run the Payment Feed Simulator
+
+In a second terminal, stream real transactions from `creditcard.csv`:
 ```bash
 python3 simulator.py --delay 0.5 --fraud-boost
 ```
-*Live Terminal Output:*
+
+Console output:
 ```text
 FraudGuard - Live Kaggle Dataset Replay Stream
 Target URL: http://127.0.0.1:8000/score (Delay: 0.5s)
 ==================================================================================
 Tx ID   |    Amount | Kaggle Ground Truth   | Model Prediction     | Risk Score
 ----------------------------------------------------------------------------------
-#1      | $  149.62 | [NORMAL PAYMENT]      | ✅ APPROVED          | 0.412
-#2      | $    2.69 | [NORMAL PAYMENT]      | ✅ APPROVED          | 0.395
-#3      | $  239.93 | [CONFIRMED FRAUD]     | 🚨 FLAGGED           | 0.684
-#4      | $   12.35 | [NORMAL PAYMENT]      | ✅ APPROVED          | 0.401
+#1      | $  149.62 | [NORMAL PAYMENT]      | APPROVED             | 0.412
+#2      | $    2.69 | [NORMAL PAYMENT]      | APPROVED             | 0.395
+#3      | $  239.93 | [CONFIRMED FRAUD]     | FLAGGED              | 0.684
+#4      | $   12.35 | [NORMAL PAYMENT]      | APPROVED             | 0.401
 ```
 
 ---
 
-## 🧪 Automated Testing
+## Testing
 
-Run the end-to-end verification suite with one command:
+Run the automated test suite to verify model training, API endpoints, and database logging:
 ```bash
 python3 test_app.py
 ```
-*Output:*
+
+Expected output:
 ```text
 =================================================================
   Running FraudGuard Automated Verification on Kaggle Dataset
 =================================================================
 [1/4] Training Isolation Forest on 'creditcard.csv' ... PASSED
 [2/4] Testing GET / (Service Health) ... PASSED
-[3/4] Testing POST /score on Kaggle Normal vs Fraud ... PASSED (Normal Risk: 0.40, Fraud Risk: 0.56)
+[3/4] Testing POST /score on Kaggle Normal vs Fraud ... PASSED
 [4/4] Testing GET /history & GET /stats (SQLite Persistence) ... PASSED
 =================================================================
   ALL TESTS PASSED! Kaggle dataset integration is 100% verified.
@@ -117,31 +131,63 @@ python3 test_app.py
 
 ---
 
-## 🎓 Technical Interview Masterclass (How to Explain this Project)
+## API Reference
 
-Use these exact technical concepts and talking points when explaining this project in an interview:
+### POST /score
+Calculates fraud risk score for an incoming transaction and logs the result to SQLite (`fraudguard.db`).
 
-### 1. How FastAPI Works Under the Hood
-* **ASGI (Asynchronous Server Gateway Interface) & Uvicorn:** Unlike traditional WSGI frameworks (like Flask) which block a thread per request, FastAPI runs on Uvicorn using Python’s `asyncio` event loop. This enables non-blocking I/O and high concurrent throughput during checkout bursts.
-* **Pydantic Data Validation:** In `server.py`, incoming requests are bound to `TransactionPayload(BaseModel)`. Pydantic validates data types before execution. If someone sends invalid data, FastAPI automatically returns an HTTP 422 error, protecting the ML model from malformed inputs.
-* **Application Lifespan Context:** The `@asynccontextmanager lifespan(app)` decorator loads `model.pkl` into memory **once** when the server boots. Subsequent incoming scoring requests evaluate the model directly from RAM with zero disk I/O overhead.
+Request:
+```bash
+curl -s -X POST http://127.0.0.1:8000/score \
+  -H "Content-Type: application/json" \
+  -d '{
+    "features": [0.0, -1.359, -0.072, 2.536, 1.378, -0.338, 0.462, 0.239, 0.098, 0.363, 0.090, -0.551, -0.617, -0.991, -0.311, 1.468, -0.470, 0.207, 0.025, 0.403, 0.251, -0.018, 0.277, -0.110, 0.066, 0.128, -0.189, 0.133, -0.021, 149.62]
+  }' | python3 -m json.tool
+```
 
-### 2. How the Isolation Forest Model Works
-* **Why Unsupervised?** In financial fraud, 99.83% of transactions are legitimate and only 0.17% are fraud. A naive supervised classifier predicting "normal" every time scores 99.83% accuracy but catches 0% of fraud. Supervised models also fail on brand-new attack vectors. Isolation Forest learns the boundary of *normal* customer behavior without requiring labeled fraud data.
-* **The Isolation Principle:** The algorithm constructs an ensemble of random binary decision trees (`model.py`). Normal transactions cluster tightly together and require **many random cuts to isolate** (long path length). Outliers and fraudulent transactions sit far away from normal clusters and are **isolated in very few cuts** (short path length). Shorter path length = higher anomaly risk score.
-* **Recall & Threshold:** Anomaly scores range from 0.0 to 1.0. With threshold set to `0.58`, our model flags **56.3% of confirmed real-world fraud** with zero supervised labels.
+Response:
+```json
+{
+  "transaction_id": 1,
+  "amount": 149.62,
+  "risk_score": 0.412,
+  "flagged": false,
+  "status": "APPROVED (NORMAL)"
+}
+```
 
-### 3. End-to-End Life of a Transaction (Step-by-Step)
-1. **Event Generation:** `simulator.py` reads a row from `creditcard.csv` and POSTs to `/score`.
-2. **Validation:** FastAPI and Pydantic parse and validate the 30 numerical features.
-3. **Inference:** `model.decision_function()` traverses 50 isolation trees and outputs a risk score in `< 1ms`.
-4. **Policy Decision:** If `risk_score >= 0.58`, transaction is marked `🚨 FLAGGED FOR FRAUD`, else `✅ APPROVED`.
-5. **Persistence:** `save_transaction()` records the transaction ID, UTC timestamp, amount, score, and decision into `fraudguard.db`.
-6. **Response:** Server returns structured JSON to the caller for immediate checkout decisioning.
+---
 
-### 4. Common Interview Questions & Answers
-* **Q: "Why SQLite instead of PostgreSQL?"**  
-  *A: "SQLite provides zero-configuration local persistence that works out-of-the-box for demonstrations. In a large-scale production setup, I would swap the SQLite context manager for an asynchronous PostgreSQL connection pool via SQLAlchemy or asyncpg."*
-* **Q: "How would you scale this architecture to 50,000 requests per second?"**  
-  *A: "I would deploy the FastAPI app across Kubernetes pods behind an NGINX load balancer. For high-volume streaming, incoming payments would publish to an Apache Kafka or Redpanda event stream, and a consumer worker pool would score transactions asynchronously and write results to Redis or DynamoDB."*
+### GET /history
+Retrieves the most recent scored transactions.
+```bash
+curl -s "http://127.0.0.1:8000/history?limit=5" | python3 -m json.tool
+```
 
+---
+
+### GET /stats
+Returns aggregate scoring statistics across all recorded transactions.
+```bash
+curl -s http://127.0.0.1:8000/stats | python3 -m json.tool
+```
+
+Response:
+```json
+{
+  "total_scored": 120,
+  "flagged_transactions": 22,
+  "approved_transactions": 98,
+  "flag_rate_percent": 18.33,
+  "avg_risk_score": 0.428
+}
+```
+
+---
+
+## Model Details
+
+- Algorithm: Isolation Forest (unsupervised tree ensemble).
+- Objective: Detect anomalies by measuring the number of random binary partitions required to isolate a sample.
+- Rationale: Legitimate transactions cluster tightly in feature space and require many splits to isolate. Anomalies and fraudulent transactions diverge from normal patterns and are isolated in significantly fewer splits.
+- Threshold: Transactions with an anomaly score of 0.58 or higher are flagged for review.

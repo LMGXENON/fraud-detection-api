@@ -35,11 +35,11 @@ def run_all_tests():
     fraud_tx_features = fraud_sample[0]
 
     with TestClient(app) as client:
-        # 2. Test Home endpoint
-        print("[2/4] Testing GET / (Service Health) ... ", end="")
+        # 2. Test Home endpoint (Web Dashboard)
+        print("[2/4] Testing GET / (Web Dashboard) ... ", end="")
         resp = client.get("/")
         assert resp.status_code == 200
-        assert resp.json()["model_loaded"] is True
+        assert "FraudGuard Dashboard" in resp.text
         print("PASSED")
 
         # 3. Test Scoring Normal vs Fraud
