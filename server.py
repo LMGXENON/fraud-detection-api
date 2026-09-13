@@ -3,17 +3,15 @@ server.py - FraudGuard Real-Time Scoring API & Live Web Dashboard
 -----------------------------------------------------------------
 Features:
 - Live Interactive Web Dashboard: GET /dashboard, GET /web (and redirect from /)
-    - Live Stream Simulator Controller: Start/Stop continuous live streaming
-    - Interactive Endpoint Tester: Test /api/score, /api/stats, /api/history, /api/health
-    - Real-time live counter cards and live transaction feed table
-- REST API:
-    POST /api/score    - Score transaction
-    GET  /api/history  - Recent scored transactions
-    GET  /api/stats    - System summary metrics
-    GET  /api/health   - Service status
-    GET  /api/sample   - Fetch real Kaggle normal/fraud transaction vectors
-- Isolation Forest anomaly detection model trained on 'creditcard.csv'
-- SQLite persistence ('fraudguard.db')
+    - Live Stream Simulator Controller: Stable UI (no layout shift), fixed-width buttons,
+      and customizable Fraud Boost percentage dropdown (0.17% to 100%).
+    - Complete API Explorer: Test all endpoints (/api/score, /api/stats, /api/history,
+      /api/health, /api/sample, /docs).
+- Resilient Routing:
+    Supports both /api/* and root aliases (e.g., /score, /history, /stats, /health).
+    Handles GET /score gracefully with instructions instead of 'Method Not Allowed'.
+- Isolation Forest anomaly detection model trained on 'creditcard.csv'.
+- SQLite persistence ('fraudguard.db').
 """
 
 import csv
@@ -25,8 +23,8 @@ from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel, Field
 from model import FastIsolationForest
 
@@ -104,7 +102,7 @@ async def lifespan(app: FastAPI):
     except FileNotFoundError:
         print(f"'{MODEL_FILE}' not found. Run: python3 train.py")
 
-    # Load a small pool of Kaggle rows for the live web simulator
+    # Load Kaggle sample rows for the web simulator
     if os.path.exists(CSV_FILE):
         try:
             with open(CSV_FILE, "r", encoding="utf-8") as f:
@@ -130,7 +128,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="FraudGuard API",
     description="Real-Time Transaction Fraud Scoring API & Web Dashboard",
-    version="2.4.0",
+    version="2.5.0",
     lifespan=lifespan
 )
 
@@ -205,28 +203,47 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .stat-card .label { font-size: 13px; color: var(--text-muted); margin-bottom: 4px; font-weight: 500; }
   .stat-card .value { font-size: 28px; font-weight: 700; }
 
-  /* Streamer Banner */
+  /* Streamer Banner - Fixed Layout to Prevent Layout Shifts */
   .streamer-banner {
     background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
     border: 1px solid var(--card-border);
     border-radius: 8px;
-    padding: 20px;
+    padding: 18px 24px;
     margin-bottom: 24px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 16px;
+    gap: 20px;
+    min-height: 84px;
   }
-  .streamer-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .streamer-info { flex: 1; min-width: 260px; }
+  .streamer-controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+  .control-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #cbd5e1;
+    font-size: 13px;
+    white-space: nowrap;
+  }
   .btn-stream {
-    padding: 10px 20px;
+    width: 200px;
+    height: 40px;
     font-size: 14px;
     border-radius: 6px;
     font-weight: 600;
     cursor: pointer;
     border: none;
-    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease;
+    flex-shrink: 0;
   }
   .btn-stream-start { background: var(--success); color: #fff; }
   .btn-stream-start:hover { background: #059669; }
@@ -237,7 +254,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     background: #0f172a;
     border: 1px solid var(--card-border);
     border-radius: 6px;
-    padding: 8px 12px;
+    padding: 7px 10px;
     color: #fff;
     font-size: 13px;
     font-family: inherit;
@@ -266,7 +283,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     gap: 24px;
     margin-bottom: 24px;
   }
-  @media (max-width: 900px) { .main-grid { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) {
+    .streamer-banner { flex-direction: column; align-items: flex-start; }
+    .streamer-controls { width: 100%; flex-wrap: wrap; }
+    .btn-stream { width: 100%; }
+    .main-grid { grid-template-columns: 1fr; }
+  }
   
   .card {
     background: var(--card);
@@ -331,11 +353,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     background: #090e17;
     border: 1px solid var(--card-border);
     border-radius: 6px;
-    padding: 12px;
+    padding: 14px;
     font-family: ui-monospace, SFMono-Regular, monospace;
     font-size: 12px;
     color: #38bdf8;
-    max-height: 280px;
+    max-height: 380px;
     overflow: auto;
     white-space: pre-wrap;
   }
@@ -347,7 +369,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <header>
     <div>
       <h1>FraudGuard Dashboard</h1>
-      <p style="color: var(--text-muted); font-size: 13px;">Live Anomaly Detection & Real-Time Stream Controller</p>
+      <p style="color: var(--text-muted); font-size: 13px;">Real-Time Transaction Risk Scoring & Testing Console</p>
     </div>
     <span class="badge-live">&#9679; API Online (Port 8000)</span>
   </header>
@@ -372,26 +394,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Live Payment Stream Simulator Controller -->
+  <!-- Live Payment Stream Simulator Controller (Fixed Layout) -->
   <div class="streamer-banner">
-    <div>
+    <div class="streamer-info">
       <h3 style="font-size: 16px; margin-bottom: 4px;">Live Transaction Stream Simulator</h3>
       <p style="font-size: 13px; color: var(--text-muted);">
         Stream real transactions from creditcard.csv directly to <code>/api/score</code> and watch numbers count live.
       </p>
     </div>
     <div class="streamer-controls">
-      <label style="margin: 0; display: flex; align-items: center; gap: 6px; color: #cbd5e1; font-size: 13px;">
-        Speed:
+      <div class="control-group">
+        <span>Speed:</span>
         <select id="streamSpeed">
           <option value="200">0.2s (Fast)</option>
           <option value="500" selected>0.5s (Standard)</option>
           <option value="1000">1.0s (Relaxed)</option>
         </select>
-      </label>
-      <label style="margin: 0; display: flex; align-items: center; gap: 6px; color: #cbd5e1; font-size: 13px;">
-        <input type="checkbox" id="streamFraudBoost"> Fraud Boost (30% fraud)
-      </label>
+      </div>
+
+      <div class="control-group">
+        <span>Fraud Boost:</span>
+        <select id="streamFraudRate">
+          <option value="0.0017">0.17% (Real Kaggle Rate)</option>
+          <option value="0.10">10% Fraud</option>
+          <option value="0.25" selected>25% Fraud (Demo Rate)</option>
+          <option value="0.50">50% Fraud (Intense)</option>
+          <option value="1.00">100% Fraud (Stress Test)</option>
+        </select>
+      </div>
+
       <button id="streamToggleBtn" class="btn-stream btn-stream-start" onclick="toggleStream()">Start Continuous Stream</button>
     </div>
   </div>
@@ -399,7 +430,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <!-- Tabs Navigation -->
   <div class="tabs">
     <button class="tab-btn active" onclick="switchTab('tab-tester')">Transaction Tester</button>
-    <button class="tab-btn" onclick="switchTab('tab-endpoints')">Interactive API Endpoints</button>
+    <button class="tab-btn" onclick="switchTab('tab-endpoints')">Interactive API Endpoints (All Routes)</button>
   </div>
 
   <!-- Tab 1: Transaction Tester & Live Feed -->
@@ -455,27 +486,38 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <!-- Tab 2: Interactive API Endpoints -->
+  <!-- Tab 2: Interactive API Endpoints (All Routes) -->
   <div id="tab-endpoints" class="tab-content">
     <div class="main-grid">
       <div class="card">
-        <h2>Test REST Endpoints</h2>
+        <h2>Interactive API Endpoint Explorer</h2>
         <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 14px;">
-          Click to execute live requests and view raw JSON responses returned by FastAPI.
+          Click any endpoint to test and inspect the real JSON response.
         </p>
-        <div style="display: flex; flex-direction: column; gap: 10px;">
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <button class="btn-secondary" style="padding: 10px; text-align: left;" onclick="callEndpoint('/api/score', 'POST', getSamplePayload())">
+            <strong>POST /api/score</strong> (or /score) - Score sample transaction
+          </button>
           <button class="btn-secondary" style="padding: 10px; text-align: left;" onclick="callEndpoint('/api/stats', 'GET')">
-            <strong>GET /api/stats</strong> - System summary & metrics
+            <strong>GET /api/stats</strong> (or /stats) - Summary analytics & flag rate
           </button>
           <button class="btn-secondary" style="padding: 10px; text-align: left;" onclick="callEndpoint('/api/history?limit=5', 'GET')">
-            <strong>GET /api/history?limit=5</strong> - Query 5 latest transactions
+            <strong>GET /api/history</strong> (or /history) - 5 latest recorded transactions
           </button>
           <button class="btn-secondary" style="padding: 10px; text-align: left;" onclick="callEndpoint('/api/health', 'GET')">
-            <strong>GET /api/health</strong> - Service health & status
+            <strong>GET /api/health</strong> (or /health) - Service & model status
           </button>
-          <button class="btn-secondary" style="padding: 10px; text-align: left;" onclick="callEndpoint('/api/sample?type=random', 'GET')">
-            <strong>GET /api/sample</strong> - Fetch random transaction vector
+          <button class="btn-secondary" style="padding: 10px; text-align: left;" onclick="callEndpoint('/api/sample?type=normal', 'GET')">
+            <strong>GET /api/sample?type=normal</strong> - Fetch verified normal vector
           </button>
+          <button class="btn-secondary" style="padding: 10px; text-align: left;" onclick="callEndpoint('/api/sample?type=fraud', 'GET')">
+            <strong>GET /api/sample?type=fraud</strong> - Fetch verified fraud vector
+          </button>
+          <a href="/docs" target="_blank" style="text-decoration: none;">
+            <button class="btn-secondary" style="padding: 10px; text-align: left; width: 100%; background: #1e3a8a; border: 1px solid #3b82f6;">
+              <strong>GET /docs</strong> - Interactive Swagger UI & OpenAPI Specification &rarr;
+            </button>
+          </a>
         </div>
       </div>
 
@@ -484,7 +526,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <h2>Live Response Output</h2>
           <span style="font-size: 12px; color: var(--text-muted);" id="apiEndpointCalled">None</span>
         </div>
-        <div class="json-viewer" id="jsonOutput">Select an endpoint to view live JSON response...</div>
+        <div class="json-viewer" id="jsonOutput">Select any endpoint on the left to execute live and view JSON output...</div>
       </div>
     </div>
   </div>
@@ -510,6 +552,16 @@ async function fetchSample(type) {
     document.getElementById('txAmount').value = data.amount.toFixed(2);
   } catch (err) {
     alert('Could not fetch sample from server.');
+  }
+}
+
+function getSamplePayload() {
+  const rawFeatures = document.getElementById('txFeatures').value;
+  const amount = parseFloat(document.getElementById('txAmount').value);
+  try {
+    return { features: JSON.parse(rawFeatures), amount: amount };
+  } catch (e) {
+    return { features: [0.0], amount: 45.0 };
   }
 }
 
@@ -598,7 +650,7 @@ async function submitTransaction(e) {
   }
 }
 
-// Continuous Streaming
+// Continuous Streaming with Percentage Dropdown
 function toggleStream() {
   const btn = document.getElementById('streamToggleBtn');
   if (isStreaming) {
@@ -613,8 +665,8 @@ function toggleStream() {
     
     const delay = parseInt(document.getElementById('streamSpeed').value);
     streamInterval = setInterval(async () => {
-      const fraudBoost = document.getElementById('streamFraudBoost').checked;
-      const isFraud = fraudBoost ? (Math.random() < 0.30) : (Math.random() < 0.05);
+      const fraudProbability = parseFloat(document.getElementById('streamFraudRate').value);
+      const isFraud = Math.random() < fraudProbability;
       const type = isFraud ? 'fraud' : 'normal';
       
       try {
@@ -634,12 +686,17 @@ function toggleStream() {
   }
 }
 
-async function callEndpoint(url, method) {
+async function callEndpoint(url, method, body=null) {
   document.getElementById('apiEndpointCalled').innerText = `${method} ${url}`;
   const out = document.getElementById('jsonOutput');
   out.innerText = 'Executing request...';
   try {
-    const res = await fetch(url);
+    const opts = { method: method };
+    if (body) {
+      opts.headers = { 'Content-Type': 'application/json' };
+      opts.body = JSON.stringify(body);
+    }
+    const res = await fetch(url, opts);
     const data = await res.json();
     out.innerText = JSON.stringify(data, null, 2);
   } catch (err) {
@@ -680,16 +737,22 @@ def web_dashboard():
 
 
 # ---------------------------------------------------------------------------
-# API Endpoints (/api/...)
+# API Endpoints (supports both /api/* and root aliases /*)
 # ---------------------------------------------------------------------------
 @app.get("/api/health")
 @app.get("/api")
+@app.get("/health")
 def api_health():
     return {
         "service": "FraudGuard Real-Time Fraud API",
         "dataset": "Kaggle Credit Card Fraud (creditcard.csv)",
         "model_loaded": model_data is not None,
-        "endpoints": ["POST /api/score", "GET /api/history", "GET /api/stats", "GET /api/sample"]
+        "endpoints": [
+            "POST /api/score (or /score)",
+            "GET /api/history (or /history)",
+            "GET /api/stats (or /stats)",
+            "GET /api/sample"
+        ]
     }
 
 
@@ -707,12 +770,29 @@ def get_sample(type: str = "random"):
         pool = sample_fraud_pool if random.random() < 0.2 else sample_normal_pool
         return random.choice(pool)
     else:
-        # Fallback dummy sample if CSV not yet read
         dummy = [0.0] * 29 + [45.00]
         return {"features": dummy, "amount": 45.00, "is_fraud": 0}
 
 
+# Handling GET on /score and /api/score to avoid "Method Not Allowed"
+@app.get("/score", include_in_schema=False)
+@app.get("/api/score", include_in_schema=False)
+def get_score_help():
+    return JSONResponse(
+        status_code=200,
+        content={
+            "message": "This endpoint requires an HTTP POST request with a JSON transaction payload.",
+            "interactive_ui": "Visit /dashboard to score transactions with one click.",
+            "post_example": {
+                "features": [0.0] * 29 + [45.00],
+                "amount": 45.00
+            }
+        }
+    )
+
+
 @app.post("/api/score", response_model=ScoreResponse)
+@app.post("/score", response_model=ScoreResponse)
 def score_transaction(payload: TransactionPayload):
     if model_data is None:
         raise HTTPException(status_code=503, detail="Model not loaded. Run: python3 train.py")
@@ -747,6 +827,7 @@ def score_transaction(payload: TransactionPayload):
 
 
 @app.get("/api/history")
+@app.get("/history")
 def get_history(limit: int = 15):
     with sqlite3.connect(DB_FILE) as conn:
         conn.row_factory = sqlite3.Row
@@ -761,6 +842,7 @@ def get_history(limit: int = 15):
 
 
 @app.get("/api/stats")
+@app.get("/stats")
 def get_stats():
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
