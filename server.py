@@ -461,7 +461,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <h1>Fraud Detection API Dashboard</h1>
       <p style="color: var(--text-muted); font-size: 13px;">Real-Time Transaction Risk Scoring & Testing Console</p>
     </div>
-    <span class="badge-live">&#9679; API Online (Port 8000)</span>
+    <span class="badge-live">&#9679; API Online</span>
   </header>
 
   <!-- Real-Time Metrics Cards -->
