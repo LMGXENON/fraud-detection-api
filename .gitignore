@@ -6,8 +6,7 @@ venv/
 creditcard.csv
 *.csv
 
-# Model & Database Artifacts
-model.pkl
+# Database Artifacts
 *.db
 fraudguard.db
 fraud_detection.db

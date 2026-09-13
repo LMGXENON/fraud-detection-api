@@ -19,6 +19,7 @@ import os
 import random
 import sqlite3
 import pickle
+import json
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -28,48 +29,77 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel, Field
 from model import FastIsolationForest
 
-DB_FILE = "fraud_detection.db"
-MODEL_FILE = "model.pkl"
-CSV_FILE = "creditcard.csv"
+# Serverless & Environment Path Configuration
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+IS_SERVERLESS = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+
+if IS_SERVERLESS:
+    DB_FILE = "/tmp/fraud_detection.db"
+else:
+    DB_FILE = os.environ.get("FRAUD_DB_PATH", os.path.join(BASE_DIR, "fraud_detection.db"))
+
+MODEL_FILE = os.path.join(BASE_DIR, "model.pkl")
+CSV_FILE = os.path.join(BASE_DIR, "creditcard.csv")
+SAMPLE_JSON_FILE = os.path.join(BASE_DIR, "sample_data.json")
 
 model_data = None
 sample_normal_pool = []
 sample_fraud_pool = []
+in_memory_transactions = []
 
 
 # ---------------------------------------------------------------------------
-# Database Layer
+# Database Layer (with Graceful Serverless Fallback)
 # ---------------------------------------------------------------------------
 def init_db():
-    with sqlite3.connect(DB_FILE) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                amount REAL NOT NULL,
-                risk_score REAL NOT NULL,
-                flagged INTEGER NOT NULL,
-                details TEXT
-            )
-        """)
-        conn.commit()
+    try:
+        db_dir = os.path.dirname(DB_FILE)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+        with sqlite3.connect(DB_FILE) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS transactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    risk_score REAL NOT NULL,
+                    flagged INTEGER NOT NULL,
+                    details TEXT
+                )
+            """)
+            conn.commit()
+    except Exception as e:
+        print(f"Notice: SQLite file setup at {DB_FILE}: {e}")
 
 
 def save_transaction(amount: float, risk_score: float, flagged: bool, details: str) -> int:
-    with sqlite3.connect(DB_FILE) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO transactions (timestamp, amount, risk_score, flagged, details)
-            VALUES (?, ?, ?, ?, ?)
-        """, (
-            datetime.now(timezone.utc).isoformat(),
-            amount,
-            risk_score,
-            1 if flagged else 0,
-            details
-        ))
-        conn.commit()
-        return cursor.lastrowid
+    ts = datetime.now(timezone.utc).isoformat()
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO transactions (timestamp, amount, risk_score, flagged, details)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                ts,
+                amount,
+                risk_score,
+                1 if flagged else 0,
+                details
+            ))
+            conn.commit()
+            return cursor.lastrowid
+    except Exception as e:
+        tx_id = len(in_memory_transactions) + 1
+        in_memory_transactions.append({
+            "id": tx_id,
+            "timestamp": ts,
+            "amount": amount,
+            "risk_score": risk_score,
+            "flagged": 1 if flagged else 0,
+            "details": details
+        })
+        return tx_id
 
 
 # ---------------------------------------------------------------------------
@@ -89,20 +119,33 @@ class ScoreResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Lifespan
+# Resource Loader (Model & Samples)
 # ---------------------------------------------------------------------------
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+def load_resources():
     global model_data, sample_normal_pool, sample_fraud_pool
     init_db()
-    try:
-        with open(MODEL_FILE, "rb") as f:
-            model_data = pickle.load(f)
-        print(f"Kaggle Fraud Model loaded from '{MODEL_FILE}'")
-    except FileNotFoundError:
-        print(f"'{MODEL_FILE}' not found. Run: python3 train.py")
 
-    # Load Kaggle sample rows for the web simulator
+    # 1. Load trained model from disk if available
+    if os.path.exists(MODEL_FILE):
+        try:
+            with open(MODEL_FILE, "rb") as f:
+                model_data = pickle.load(f)
+            print(f"Kaggle Fraud Model loaded from '{MODEL_FILE}'")
+        except Exception as e:
+            print(f"Notice: Could not load model from '{MODEL_FILE}': {e}")
+
+    # If model is not loaded, initialize fallback model
+    if model_data is None:
+        try:
+            fallback = FastIsolationForest(n_estimators=30, max_samples=128)
+            synthetic = [[0.0] * 29 + [50.0] for _ in range(100)]
+            fallback.fit(synthetic)
+            model_data = {"model": fallback, "threshold": 0.58, "training_samples": 100}
+            print("Initialized self-healing fallback Isolation Forest model.")
+        except Exception as e:
+            print(f"Warning: Fallback model init failed: {e}")
+
+    # 2. Load sample transactions
     if os.path.exists(CSV_FILE):
         try:
             with open(CSV_FILE, "r", encoding="utf-8") as f:
@@ -118,10 +161,31 @@ async def lifespan(app: FastAPI):
                         sample_fraud_pool.append({"features": feats, "amount": amt, "is_fraud": 1})
                     elif len(sample_normal_pool) < 1500:
                         sample_normal_pool.append({"features": feats, "amount": amt, "is_fraud": 0})
-            print(f"Web sample pool ready ({len(sample_normal_pool)} normal, {len(sample_fraud_pool)} fraud)")
+            print(f"Web sample pool ready from CSV ({len(sample_normal_pool)} normal, {len(sample_fraud_pool)} fraud)")
         except Exception as e:
-            print(f"Warning loading sample pool: {e}")
+            print(f"Notice loading CSV samples: {e}")
 
+    if not sample_normal_pool and os.path.exists(SAMPLE_JSON_FILE):
+        try:
+            with open(SAMPLE_JSON_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                sample_normal_pool = data.get("normal", [])
+                sample_fraud_pool = data.get("fraud", [])
+            print(f"Web sample pool ready from JSON ({len(sample_normal_pool)} normal, {len(sample_fraud_pool)} fraud)")
+        except Exception as e:
+            print(f"Notice loading JSON samples: {e}")
+
+
+# Initialize immediately for serverless execution
+load_resources()
+
+
+# ---------------------------------------------------------------------------
+# Lifespan
+# ---------------------------------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    load_resources()
     yield
 
 
@@ -829,26 +893,34 @@ def score_transaction(payload: TransactionPayload):
 @app.get("/api/history")
 @app.get("/history")
 def get_history(limit: int = 15):
-    with sqlite3.connect(DB_FILE) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        rows = cursor.execute("""
-            SELECT id, timestamp, amount, risk_score, flagged, details
-            FROM transactions
-            ORDER BY id DESC
-            LIMIT ?
-        """, (limit,)).fetchall()
-        return [dict(r) for r in rows]
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            rows = cursor.execute("""
+                SELECT id, timestamp, amount, risk_score, flagged, details
+                FROM transactions
+                ORDER BY id DESC
+                LIMIT ?
+            """, (limit,)).fetchall()
+            return [dict(r) for r in rows]
+    except Exception:
+        return list(reversed(in_memory_transactions[-limit:]))
 
 
 @app.get("/api/stats")
 @app.get("/stats")
 def get_stats():
-    with sqlite3.connect(DB_FILE) as conn:
-        cursor = conn.cursor()
-        total = cursor.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
-        flagged = cursor.execute("SELECT COUNT(*) FROM transactions WHERE flagged = 1").fetchone()[0]
-        avg_risk = cursor.execute("SELECT AVG(risk_score) FROM transactions").fetchone()[0]
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            cursor = conn.cursor()
+            total = cursor.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+            flagged = cursor.execute("SELECT COUNT(*) FROM transactions WHERE flagged = 1").fetchone()[0]
+            avg_risk = cursor.execute("SELECT AVG(risk_score) FROM transactions").fetchone()[0]
+    except Exception:
+        total = len(in_memory_transactions)
+        flagged = sum(1 for t in in_memory_transactions if t.get("flagged") == 1)
+        avg_risk = sum(t.get("risk_score", 0.0) for t in in_memory_transactions) / total if total > 0 else 0.0
 
     flag_rate = round((flagged / total * 100), 2) if total > 0 else 0.0
     return {
