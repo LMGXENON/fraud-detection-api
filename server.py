@@ -2,16 +2,23 @@
 server.py - FraudGuard Real-Time Scoring API & Live Web Dashboard
 -----------------------------------------------------------------
 Features:
-- Web Dashboard: GET /dashboard, GET /web (and redirect from /)
+- Live Interactive Web Dashboard: GET /dashboard, GET /web (and redirect from /)
+    - Live Stream Simulator Controller: Start/Stop continuous live streaming
+    - Interactive Endpoint Tester: Test /api/score, /api/stats, /api/history, /api/health
+    - Real-time live counter cards and live transaction feed table
 - REST API:
     POST /api/score    - Score transaction
     GET  /api/history  - Recent scored transactions
     GET  /api/stats    - System summary metrics
     GET  /api/health   - Service status
+    GET  /api/sample   - Fetch real Kaggle normal/fraud transaction vectors
 - Isolation Forest anomaly detection model trained on 'creditcard.csv'
 - SQLite persistence ('fraudguard.db')
 """
 
+import csv
+import os
+import random
 import sqlite3
 import pickle
 from datetime import datetime, timezone
@@ -25,8 +32,11 @@ from model import FastIsolationForest
 
 DB_FILE = "fraudguard.db"
 MODEL_FILE = "model.pkl"
+CSV_FILE = "creditcard.csv"
 
 model_data = None
+sample_normal_pool = []
+sample_fraud_pool = []
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +95,7 @@ class ScoreResponse(BaseModel):
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global model_data
+    global model_data, sample_normal_pool, sample_fraud_pool
     init_db()
     try:
         with open(MODEL_FILE, "rb") as f:
@@ -93,19 +103,40 @@ async def lifespan(app: FastAPI):
         print(f"Kaggle Fraud Model loaded from '{MODEL_FILE}'")
     except FileNotFoundError:
         print(f"'{MODEL_FILE}' not found. Run: python3 train.py")
+
+    # Load a small pool of Kaggle rows for the live web simulator
+    if os.path.exists(CSV_FILE):
+        try:
+            with open(CSV_FILE, "r", encoding="utf-8") as f:
+                reader = csv.reader(f)
+                next(reader)
+                for row in reader:
+                    if not row:
+                        continue
+                    is_fraud = int(row[-1].strip('"'))
+                    feats = [float(x) for x in row[:-1]]
+                    amt = float(row[-2])
+                    if is_fraud == 1:
+                        sample_fraud_pool.append({"features": feats, "amount": amt, "is_fraud": 1})
+                    elif len(sample_normal_pool) < 1500:
+                        sample_normal_pool.append({"features": feats, "amount": amt, "is_fraud": 0})
+            print(f"Web sample pool ready ({len(sample_normal_pool)} normal, {len(sample_fraud_pool)} fraud)")
+        except Exception as e:
+            print(f"Warning loading sample pool: {e}")
+
     yield
 
 
 app = FastAPI(
     title="FraudGuard API",
-    description="Real-Time Transaction Fraud Scoring API",
-    version="2.3.0",
+    description="Real-Time Transaction Fraud Scoring API & Web Dashboard",
+    version="2.4.0",
     lifespan=lifespan
 )
 
 
 # ---------------------------------------------------------------------------
-# Web Dashboard (Live UI)
+# Web Dashboard HTML
 # ---------------------------------------------------------------------------
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -115,7 +146,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <title>FraudGuard - Live Fraud Detection Dashboard</title>
 <style>
   :root {
-    --bg: #0f172a;
+    --bg: #0b1120;
     --card: #1e293b;
     --card-border: #334155;
     --text: #f8fafc;
@@ -124,6 +155,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     --primary-hover: #2563eb;
     --success: #10b981;
     --danger: #ef4444;
+    --warning: #f59e0b;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -133,7 +165,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     padding: 24px;
     line-height: 1.5;
   }
-  .container { max-width: 1100px; margin: 0 auto; }
+  .container { max-width: 1200px; margin: 0 auto; }
   header {
     display: flex;
     justify-content: space-between;
@@ -141,16 +173,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     border-bottom: 1px solid var(--card-border);
     padding-bottom: 16px;
     margin-bottom: 24px;
+    flex-wrap: wrap;
+    gap: 12px;
   }
-  header h1 { font-size: 22px; font-weight: 700; color: #fff; }
+  header h1 { font-size: 24px; font-weight: 700; color: #fff; }
   .badge-live {
-    background: rgba(16, 185, 129, 0.2);
+    background: rgba(16, 185, 129, 0.15);
     color: var(--success);
-    padding: 4px 10px;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    padding: 6px 12px;
     border-radius: 9999px;
     font-size: 12px;
     font-weight: 600;
   }
+  
+  /* Stats Cards */
   .grid-stats {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -162,9 +199,66 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     border: 1px solid var(--card-border);
     border-radius: 8px;
     padding: 16px 20px;
+    position: relative;
+    overflow: hidden;
   }
-  .stat-card .label { font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
-  .stat-card .value { font-size: 24px; font-weight: 700; }
+  .stat-card .label { font-size: 13px; color: var(--text-muted); margin-bottom: 4px; font-weight: 500; }
+  .stat-card .value { font-size: 28px; font-weight: 700; }
+
+  /* Streamer Banner */
+  .streamer-banner {
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .streamer-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .btn-stream {
+    padding: 10px 20px;
+    font-size: 14px;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s ease;
+  }
+  .btn-stream-start { background: var(--success); color: #fff; }
+  .btn-stream-start:hover { background: #059669; }
+  .btn-stream-stop { background: var(--danger); color: #fff; }
+  .btn-stream-stop:hover { background: #dc2626; }
+  
+  select, input[type="number"], input[type="text"], textarea {
+    background: #0f172a;
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: #fff;
+    font-size: 13px;
+    font-family: inherit;
+  }
+  
+  /* Tabs Layout */
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid var(--card-border); }
+  .tab-btn {
+    background: transparent;
+    color: var(--text-muted);
+    padding: 10px 18px;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    border-top: none; border-left: none; border-right: none;
+  }
+  .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+  
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
   
   .main-grid {
     display: grid;
@@ -172,7 +266,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     gap: 24px;
     margin-bottom: 24px;
   }
-  @media (max-width: 800px) { .main-grid { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { .main-grid { grid-template-columns: 1fr; } }
   
   .card {
     background: var(--card);
@@ -182,52 +276,47 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
   .card h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #fff; }
   
-  .btn-group { display: flex; gap: 8px; margin-bottom: 16px; }
+  .btn-group { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
   button {
     cursor: pointer;
     border: none;
     border-radius: 6px;
     font-weight: 600;
-    font-size: 13px;
-    padding: 8px 14px;
+    font-size: 12px;
+    padding: 7px 12px;
     transition: all 0.15s ease;
   }
-  .btn-sample-normal { background: #334155; color: #fff; }
-  .btn-sample-normal:hover { background: #475569; }
-  .btn-sample-fraud { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
-  .btn-sample-fraud:hover { background: rgba(239, 68, 68, 0.3); }
-  .btn-submit { background: var(--primary); color: #fff; width: 100%; padding: 10px; font-size: 14px; margin-top: 12px; }
+  .btn-secondary { background: #334155; color: #fff; }
+  .btn-secondary:hover { background: #475569; }
+  .btn-danger-light { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+  .btn-danger-light:hover { background: rgba(239, 68, 68, 0.25); }
+  .btn-submit { background: var(--primary); color: #fff; width: 100%; padding: 10px; font-size: 14px; margin-top: 10px; }
   .btn-submit:hover { background: var(--primary-hover); }
 
   label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; font-weight: 500; }
-  input, textarea {
+  textarea {
     width: 100%;
-    background: #0f172a;
-    border: 1px solid var(--card-border);
-    border-radius: 6px;
-    padding: 8px 12px;
-    color: #fff;
     font-family: ui-monospace, SFMono-Regular, monospace;
-    font-size: 12px;
-    margin-bottom: 12px;
+    font-size: 11px;
+    height: 75px;
+    margin-bottom: 10px;
+    resize: vertical;
   }
-  textarea { height: 90px; resize: vertical; }
-
+  
   .result-box {
-    margin-top: 16px;
-    padding: 16px;
+    margin-top: 14px;
+    padding: 14px;
     border-radius: 6px;
     background: #0f172a;
     border: 1px solid var(--card-border);
     display: none;
   }
-  .result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-  .result-title { font-size: 14px; font-weight: 700; }
-  .result-score { font-size: 20px; font-weight: 700; }
-
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--card-border); }
-  th { color: var(--text-muted); font-size: 12px; font-weight: 600; text-transform: uppercase; }
+  .result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { padding: 9px 10px; text-align: left; border-bottom: 1px solid var(--card-border); }
+  th { color: var(--text-muted); font-size: 11.5px; font-weight: 600; text-transform: uppercase; }
   .status-pill {
     display: inline-block;
     padding: 2px 8px;
@@ -235,8 +324,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     font-size: 11px;
     font-weight: 600;
   }
-  .status-pill.approved { background: rgba(16, 185, 129, 0.2); color: var(--success); }
-  .status-pill.flagged { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+  .status-pill.approved { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+  .status-pill.flagged { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+  
+  .json-viewer {
+    background: #090e17;
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    padding: 12px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px;
+    color: #38bdf8;
+    max-height: 280px;
+    overflow: auto;
+    white-space: pre-wrap;
+  }
 </style>
 </head>
 <body>
@@ -245,18 +347,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <header>
     <div>
       <h1>FraudGuard Dashboard</h1>
-      <p style="color: var(--text-muted); font-size: 13px;">Real-Time Transaction Risk Scoring API (/api/score)</p>
+      <p style="color: var(--text-muted); font-size: 13px;">Live Anomaly Detection & Real-Time Stream Controller</p>
     </div>
-    <span class="badge-live">&#9679; API Live (Port 8000)</span>
+    <span class="badge-live">&#9679; API Online (Port 8000)</span>
   </header>
 
+  <!-- Real-Time Metrics Cards -->
   <div class="grid-stats">
     <div class="stat-card">
-      <div class="label">Total Transactions Scored</div>
+      <div class="label">Total Scored Transactions</div>
       <div class="value" id="stat-total">--</div>
     </div>
     <div class="stat-card">
-      <div class="label">Approved Transactions</div>
+      <div class="label">Approved (Normal)</div>
       <div class="value" style="color: var(--success);" id="stat-approved">--</div>
     </div>
     <div class="stat-card">
@@ -269,63 +372,149 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
-  <div class="main-grid">
-    <div class="card">
-      <h2>Interactive Transaction Tester</h2>
-      <div class="btn-group">
-        <button type="button" class="btn-sample-normal" onclick="loadSample(false)">Load Normal Sample</button>
-        <button type="button" class="btn-sample-fraud" onclick="loadSample(true)">Load Fraud Sample</button>
+  <!-- Live Payment Stream Simulator Controller -->
+  <div class="streamer-banner">
+    <div>
+      <h3 style="font-size: 16px; margin-bottom: 4px;">Live Transaction Stream Simulator</h3>
+      <p style="font-size: 13px; color: var(--text-muted);">
+        Stream real transactions from creditcard.csv directly to <code>/api/score</code> and watch numbers count live.
+      </p>
+    </div>
+    <div class="streamer-controls">
+      <label style="margin: 0; display: flex; align-items: center; gap: 6px; color: #cbd5e1; font-size: 13px;">
+        Speed:
+        <select id="streamSpeed">
+          <option value="200">0.2s (Fast)</option>
+          <option value="500" selected>0.5s (Standard)</option>
+          <option value="1000">1.0s (Relaxed)</option>
+        </select>
+      </label>
+      <label style="margin: 0; display: flex; align-items: center; gap: 6px; color: #cbd5e1; font-size: 13px;">
+        <input type="checkbox" id="streamFraudBoost"> Fraud Boost (30% fraud)
+      </label>
+      <button id="streamToggleBtn" class="btn-stream btn-stream-start" onclick="toggleStream()">Start Continuous Stream</button>
+    </div>
+  </div>
+
+  <!-- Tabs Navigation -->
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('tab-tester')">Transaction Tester</button>
+    <button class="tab-btn" onclick="switchTab('tab-endpoints')">Interactive API Endpoints</button>
+  </div>
+
+  <!-- Tab 1: Transaction Tester & Live Feed -->
+  <div id="tab-tester" class="tab-content active">
+    <div class="main-grid">
+      <!-- Tester Form -->
+      <div class="card">
+        <h2>Manual Transaction Tester (POST /api/score)</h2>
+        <div class="btn-group">
+          <button type="button" class="btn-secondary" onclick="fetchSample('normal')">Load Real Normal Row</button>
+          <button type="button" class="btn-danger-light" onclick="fetchSample('fraud')">Load Real Fraud Row</button>
+        </div>
+
+        <form id="scoreForm" onsubmit="submitTransaction(event)">
+          <label>Amount (USD):</label>
+          <input type="number" step="0.01" id="txAmount" required value="45.00" style="width: 100%; margin-bottom: 10px;">
+
+          <label>30 Kaggle Features [Time, V1..V28, Amount] (JSON Array):</label>
+          <textarea id="txFeatures" required></textarea>
+
+          <button type="submit" class="btn-submit">Score Transaction</button>
+        </form>
+
+        <div class="result-box" id="resultBox">
+          <div class="result-header">
+            <span style="font-weight: 700; font-size: 14px;" id="resultStatus">--</span>
+            <span style="font-weight: 700; font-size: 18px;" id="resultScore">--</span>
+          </div>
+          <div style="font-size: 12px; color: var(--text-muted);" id="resultDetails"></div>
+        </div>
       </div>
 
-      <form id="scoreForm" onsubmit="submitTransaction(event)">
-        <label>Amount (USD):</label>
-        <input type="number" step="0.01" id="txAmount" required value="45.00">
-
-        <label>30 Kaggle Features [Time, V1..V28, Amount] (JSON Array):</label>
-        <textarea id="txFeatures" required></textarea>
-
-        <button type="submit" class="btn-submit">Score Transaction</button>
-      </form>
-
-      <div class="result-box" id="resultBox">
-        <div class="result-header">
-          <span class="result-title" id="resultStatus">--</span>
-          <span class="result-score" id="resultScore">--</span>
+      <!-- Live Recent Feed -->
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <h2>Live Scored Feed</h2>
+          <span style="font-size: 12px; color: var(--text-muted);">Auto-updating every 2s</span>
         </div>
-        <div style="font-size: 12px; color: var(--text-muted);" id="resultDetails"></div>
+        <table>
+          <thead>
+            <tr>
+              <th>Tx ID</th>
+              <th>Amount</th>
+              <th>Risk Score</th>
+              <th>Decision</th>
+            </tr>
+          </thead>
+          <tbody id="historyTable">
+            <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Loading transactions...</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
+  </div>
 
-    <div class="card">
-      <h2>Recent Scored Transactions</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Tx ID</th>
-            <th>Amount</th>
-            <th>Risk Score</th>
-            <th>Decision</th>
-          </tr>
-        </thead>
-        <tbody id="historyTable">
-          <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Loading transactions...</td></tr>
-        </tbody>
-      </table>
+  <!-- Tab 2: Interactive API Endpoints -->
+  <div id="tab-endpoints" class="tab-content">
+    <div class="main-grid">
+      <div class="card">
+        <h2>Test REST Endpoints</h2>
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 14px;">
+          Click to execute live requests and view raw JSON responses returned by FastAPI.
+        </p>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <button class="btn-secondary" style="padding: 10px; text-align: left;" onclick="callEndpoint('/api/stats', 'GET')">
+            <strong>GET /api/stats</strong> - System summary & metrics
+          </button>
+          <button class="btn-secondary" style="padding: 10px; text-align: left;" onclick="callEndpoint('/api/history?limit=5', 'GET')">
+            <strong>GET /api/history?limit=5</strong> - Query 5 latest transactions
+          </button>
+          <button class="btn-secondary" style="padding: 10px; text-align: left;" onclick="callEndpoint('/api/health', 'GET')">
+            <strong>GET /api/health</strong> - Service health & status
+          </button>
+          <button class="btn-secondary" style="padding: 10px; text-align: left;" onclick="callEndpoint('/api/sample?type=random', 'GET')">
+            <strong>GET /api/sample</strong> - Fetch random transaction vector
+          </button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <h2>Live Response Output</h2>
+          <span style="font-size: 12px; color: var(--text-muted);" id="apiEndpointCalled">None</span>
+        </div>
+        <div class="json-viewer" id="jsonOutput">Select an endpoint to view live JSON response...</div>
+      </div>
     </div>
   </div>
 </div>
 
 <script>
-const sampleNormal = [0.0, -1.359, -0.072, 2.536, 1.378, -0.338, 0.462, 0.239, 0.098, 0.363, 0.090, -0.551, -0.617, -0.991, -0.311, 1.468, -0.470, 0.207, 0.025, 0.403, 0.251, -0.018, 0.277, -0.110, 0.066, 0.128, -0.189, 0.133, -0.021, 45.00];
-const sampleFraud = [406.0, -2.312, 1.951, -1.609, 3.997, -0.522, -1.426, -2.537, 1.391, -2.770, -2.772, 3.202, -2.899, -0.595, -4.289, 0.389, -1.140, -2.830, -0.016, 0.416, 0.126, 0.517, -0.035, -0.465, 0.320, 0.044, 0.177, 0.261, -0.143, 239.93];
+let streamInterval = null;
+let isStreaming = false;
 
-function loadSample(isFraud) {
-  const sample = isFraud ? sampleFraud : sampleNormal;
-  document.getElementById('txFeatures').value = JSON.stringify(sample);
-  document.getElementById('txAmount').value = sample[sample.length - 1];
+function switchTab(tabId) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById(tabId).classList.add('active');
 }
 
-loadSample(false);
+// Fetch real Kaggle row from API
+async function fetchSample(type) {
+  try {
+    const res = await fetch(`/api/sample?type=${type}`);
+    const data = await res.json();
+    document.getElementById('txFeatures').value = JSON.stringify(data.features);
+    document.getElementById('txAmount').value = data.amount.toFixed(2);
+  } catch (err) {
+    alert('Could not fetch sample from server.');
+  }
+}
+
+// Initial sample load
+fetchSample('normal');
 
 async function updateStats() {
   try {
@@ -409,11 +598,63 @@ async function submitTransaction(e) {
   }
 }
 
+// Continuous Streaming
+function toggleStream() {
+  const btn = document.getElementById('streamToggleBtn');
+  if (isStreaming) {
+    clearInterval(streamInterval);
+    isStreaming = false;
+    btn.className = 'btn-stream btn-stream-start';
+    btn.innerText = 'Start Continuous Stream';
+  } else {
+    isStreaming = true;
+    btn.className = 'btn-stream btn-stream-stop';
+    btn.innerText = 'Stop Stream';
+    
+    const delay = parseInt(document.getElementById('streamSpeed').value);
+    streamInterval = setInterval(async () => {
+      const fraudBoost = document.getElementById('streamFraudBoost').checked;
+      const isFraud = fraudBoost ? (Math.random() < 0.30) : (Math.random() < 0.05);
+      const type = isFraud ? 'fraud' : 'normal';
+      
+      try {
+        const sampleRes = await fetch(`/api/sample?type=${type}`);
+        const sample = await sampleRes.json();
+        
+        await fetch('/api/score', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ features: sample.features, amount: sample.amount })
+        });
+        
+        updateStats();
+        updateHistory();
+      } catch (err) {}
+    }, delay);
+  }
+}
+
+async function callEndpoint(url, method) {
+  document.getElementById('apiEndpointCalled').innerText = `${method} ${url}`;
+  const out = document.getElementById('jsonOutput');
+  out.innerText = 'Executing request...';
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    out.innerText = JSON.stringify(data, null, 2);
+  } catch (err) {
+    out.innerText = 'Error calling endpoint: ' + err.message;
+  }
+}
+
+// Initial polling
 updateStats();
 updateHistory();
 setInterval(() => {
-  updateStats();
-  updateHistory();
+  if (!isStreaming) {
+    updateStats();
+    updateHistory();
+  }
 }, 2000);
 </script>
 
@@ -448,8 +689,27 @@ def api_health():
         "service": "FraudGuard Real-Time Fraud API",
         "dataset": "Kaggle Credit Card Fraud (creditcard.csv)",
         "model_loaded": model_data is not None,
-        "endpoints": ["POST /api/score", "GET /api/history", "GET /api/stats"]
+        "endpoints": ["POST /api/score", "GET /api/history", "GET /api/stats", "GET /api/sample"]
     }
+
+
+@app.get("/api/sample")
+def get_sample(type: str = "random"):
+    """
+    Returns a sample transaction row from creditcard.csv for live testing.
+    type: 'normal', 'fraud', or 'random'
+    """
+    if type == "fraud" and sample_fraud_pool:
+        return random.choice(sample_fraud_pool)
+    elif type == "normal" and sample_normal_pool:
+        return random.choice(sample_normal_pool)
+    elif sample_normal_pool and sample_fraud_pool:
+        pool = sample_fraud_pool if random.random() < 0.2 else sample_normal_pool
+        return random.choice(pool)
+    else:
+        # Fallback dummy sample if CSV not yet read
+        dummy = [0.0] * 29 + [45.00]
+        return {"features": dummy, "amount": 45.00, "is_fraud": 0}
 
 
 @app.post("/api/score", response_model=ScoreResponse)

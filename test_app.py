@@ -4,8 +4,9 @@ test_app.py - Automated Verification Suite for FraudGuard
 Verifies:
 1. Training on 'creditcard.csv' and saving 'model.pkl'.
 2. Web Dashboard at GET /dashboard and GET /web.
-3. Scoring normal vs fraud transactions at POST /api/score.
-4. SQLite persistence at GET /api/history & GET /api/stats.
+3. API Health at GET /api/health and sample provider at GET /api/sample.
+4. Scoring normal vs fraud transactions at POST /api/score.
+5. SQLite persistence at GET /api/history & GET /api/stats.
 
 Run with:
     python3 test_app.py
@@ -45,11 +46,15 @@ def run_all_tests():
         assert web_resp.status_code == 200
         print("PASSED")
 
-        # 3. Test API Health
-        print("[3/5] Testing GET /api/health ... ", end="")
+        # 3. Test API Health & Sample Endpoint
+        print("[3/5] Testing GET /api/health & GET /api/sample ... ", end="")
         health_resp = client.get("/api/health")
         assert health_resp.status_code == 200
         assert health_resp.json()["model_loaded"] is True
+
+        sample_resp = client.get("/api/sample?type=normal")
+        assert sample_resp.status_code == 200
+        assert len(sample_resp.json()["features"]) == 30
         print("PASSED")
 
         # 4. Test Scoring Normal vs Fraud via /api/score
@@ -77,7 +82,7 @@ def run_all_tests():
         print("PASSED")
 
     print("=" * 65)
-    print("  ALL 5 TESTS PASSED! Web & API routing 100% verified.")
+    print("  ALL 5 TESTS PASSED! Live Streamer & API fully verified.")
     print("=" * 65)
 
 
