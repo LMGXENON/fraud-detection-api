@@ -201,8 +201,10 @@ app = FastAPI(
 async def vercel_rewrite_middleware(request: Request, call_next):
     if request.headers.get("x-debug-headers"):
         return JSONResponse({
-            "scope_path": request.scope.get("path"),
-            "headers": dict(request.headers)
+            "scope_keys": list(request.scope.keys()),
+            "scope_dump": {k: str(v) for k, v in request.scope.items() if k not in ("headers", "app")},
+            "url": str(request.url),
+            "url_path": request.url.path,
         })
     matched_path = request.headers.get("x-matched-path")
     if matched_path and matched_path not in ("/api/index.py", "/api/index"):
