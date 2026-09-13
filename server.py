@@ -197,6 +197,17 @@ app = FastAPI(
 )
 
 
+@app.middleware("http")
+async def vercel_rewrite_middleware(request: Request, call_next):
+    matched_path = request.headers.get("x-matched-path")
+    if matched_path:
+        request.scope["path"] = matched_path
+    elif request.scope.get("path") in ("/api/index.py", "/api/index"):
+        request.scope["path"] = "/"
+    return await call_next(request)
+
+
+
 # ---------------------------------------------------------------------------
 # Web Dashboard HTML
 # ---------------------------------------------------------------------------
@@ -787,14 +798,12 @@ setInterval(() => {
 # ---------------------------------------------------------------------------
 # Web Dashboard Routes
 # ---------------------------------------------------------------------------
-@app.get("/", include_in_schema=False)
-def root_redirect():
-    """Redirect root path to /dashboard."""
-    return RedirectResponse(url="/dashboard")
 
-
+@app.get("/", response_class=HTMLResponse)
 @app.get("/dashboard", response_class=HTMLResponse)
 @app.get("/web", response_class=HTMLResponse)
+@app.get("/api/index.py", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/api/index", response_class=HTMLResponse, include_in_schema=False)
 def web_dashboard():
     """Serves the live interactive dashboard."""
     return HTMLResponse(content=DASHBOARD_HTML)
