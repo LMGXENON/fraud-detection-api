@@ -64,28 +64,34 @@ def init_db():
                     amount REAL NOT NULL,
                     risk_score REAL NOT NULL,
                     flagged INTEGER NOT NULL,
-                    details TEXT
+                    details TEXT,
+                    ground_truth INTEGER
                 )
             """)
+            try:
+                conn.execute("ALTER TABLE transactions ADD COLUMN ground_truth INTEGER")
+            except Exception:
+                pass
             conn.commit()
     except Exception as e:
         print(f"Notice: SQLite file setup at {DB_FILE}: {e}")
 
 
-def save_transaction(amount: float, risk_score: float, flagged: bool, details: str) -> int:
+def save_transaction(amount: float, risk_score: float, flagged: bool, details: str, ground_truth: Optional[int] = None) -> int:
     ts = datetime.now(timezone.utc).isoformat()
     try:
         with sqlite3.connect(DB_FILE) as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO transactions (timestamp, amount, risk_score, flagged, details)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO transactions (timestamp, amount, risk_score, flagged, details, ground_truth)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 ts,
                 amount,
                 risk_score,
                 1 if flagged else 0,
-                details
+                details,
+                ground_truth
             ))
             conn.commit()
             return cursor.lastrowid
@@ -97,7 +103,8 @@ def save_transaction(amount: float, risk_score: float, flagged: bool, details: s
             "amount": amount,
             "risk_score": risk_score,
             "flagged": 1 if flagged else 0,
-            "details": details
+            "details": details,
+            "ground_truth": ground_truth
         })
         return tx_id
 
@@ -108,6 +115,8 @@ def save_transaction(amount: float, risk_score: float, flagged: bool, details: s
 class TransactionPayload(BaseModel):
     features: list[float] = Field(..., description="List of 30 transaction features [Time, V1..V28, Amount]")
     amount: Optional[float] = Field(None, description="Transaction dollar amount (extracted from features[-1] if omitted)")
+    ground_truth: Optional[int] = Field(None, description="Known Kaggle dataset label (0 = Normal, 1 = Fraud)")
+    is_fraud: Optional[int] = Field(None, description="Alias for ground_truth")
 
 
 class ScoreResponse(BaseModel):
@@ -116,6 +125,7 @@ class ScoreResponse(BaseModel):
     risk_score: float
     flagged: bool
     status: str
+    ground_truth: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -540,12 +550,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <tr>
               <th>Tx ID</th>
               <th>Amount</th>
+              <th>Kaggle Ground Truth</th>
+              <th>Model Prediction</th>
               <th>Risk Score</th>
-              <th>Decision</th>
             </tr>
           </thead>
           <tbody id="historyTable">
-            <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Loading transactions...</td></tr>
+            <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Loading transactions...</td></tr>
           </tbody>
         </table>
       </div>
@@ -609,15 +620,35 @@ function switchTab(tabId) {
   document.getElementById(tabId).classList.add('active');
 }
 
-// Fetch real Kaggle row from API
+// Built-in verified samples from Kaggle dataset for instant offline fallback
+const FALLBACK_NORMAL = {
+  features: [0.0,-1.35980713367369,-0.0727811733098497,2.53634673796914,1.37815522427083,-0.338320769942518,0.462387777762292,0.239598554061194,0.0986979012610507,0.363786969611694,0.0907941719789316,-0.551599533260813,-0.617800855762348,-0.991389847236409,-0.311169353699879,1.46817697209427,-0.470400525259478,0.207971241929242,0.0257905801985591,0.403992960161395,0.251412098239705,-0.018306777944153,0.277837575558899,-0.110473910188767,0.0669280749146731,0.128539358273528,-0.189114843888824,0.133558376740387,-0.0210530534538215,149.62],
+  amount: 149.62,
+  is_fraud: 0
+};
+const FALLBACK_FRAUD = {
+  features: [406.0,-2.3122265423263,1.95199201064158,-1.60985073229769,3.9979055875468,-0.522187864667764,-1.42654531920595,-2.53738730436218,1.39165724829804,-2.7700892771969,-2.77227214465915,3.20203320709635,-2.89990738849473,-0.595221881324605,-4.28925442962148,0.389724120274487,-1.1407471798114,-2.83005567450437,-0.0168224681808257,0.416955705037907,0.126910559061474,0.517232370861764,-0.0350493686052974,-0.465211076182299,0.320198198094711,0.0445191674737682,0.177839798284401,0.261145002567677,-0.143275874698919,0.0],
+  amount: 0.0,
+  is_fraud: 1
+};
+
+let currentSampleGroundTruth = 0;
+
+// Fetch real Kaggle row from API with zero-alert graceful fallback
 async function fetchSample(type) {
   try {
     const res = await fetch(`/api/sample?type=${type}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (!data.features || !Array.isArray(data.features)) throw new Error('Invalid format');
     document.getElementById('txFeatures').value = JSON.stringify(data.features);
-    document.getElementById('txAmount').value = data.amount.toFixed(2);
+    document.getElementById('txAmount').value = Number(data.amount).toFixed(2);
+    currentSampleGroundTruth = data.is_fraud !== undefined ? data.is_fraud : (type === 'fraud' ? 1 : 0);
   } catch (err) {
-    alert('Could not fetch sample from server.');
+    const fallback = type === 'fraud' ? FALLBACK_FRAUD : FALLBACK_NORMAL;
+    document.getElementById('txFeatures').value = JSON.stringify(fallback.features);
+    document.getElementById('txAmount').value = Number(fallback.amount).toFixed(2);
+    currentSampleGroundTruth = fallback.is_fraud;
   }
 }
 
@@ -625,9 +656,9 @@ function getSamplePayload() {
   const rawFeatures = document.getElementById('txFeatures').value;
   const amount = parseFloat(document.getElementById('txAmount').value);
   try {
-    return { features: JSON.parse(rawFeatures), amount: amount };
+    return { features: JSON.parse(rawFeatures), amount: amount, ground_truth: currentSampleGroundTruth };
   } catch (e) {
-    return { features: [0.0], amount: 45.0 };
+    return { features: FALLBACK_NORMAL.features, amount: FALLBACK_NORMAL.amount, ground_truth: 0 };
   }
 }
 
@@ -653,17 +684,26 @@ async function updateHistory() {
     const rows = await res.json();
     const tbody = document.getElementById('historyTable');
     if (!rows.length) {
-      tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">No transactions scored yet.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">No transactions scored yet.</td></tr>';
       return;
     }
-    tbody.innerHTML = rows.map(r => `
-      <tr>
-        <td>#${r.id}</td>
-        <td>$${r.amount.toFixed(2)}</td>
-        <td><strong>${r.risk_score.toFixed(3)}</strong></td>
-        <td><span class="status-pill ${r.flagged ? 'flagged' : 'approved'}">${r.flagged ? 'FLAGGED' : 'APPROVED'}</span></td>
-      </tr>
-    `).join('');
+    tbody.innerHTML = rows.map(r => {
+      let gtBadge = '<span style="color: var(--text-muted); font-size: 11px;">Unlabeled</span>';
+      if (r.ground_truth === 1) {
+        gtBadge = '<span class="status-pill flagged">FRAUD (1)</span>';
+      } else if (r.ground_truth === 0) {
+        gtBadge = '<span class="status-pill approved">NORMAL (0)</span>';
+      }
+      return `
+        <tr>
+          <td>#${r.id}</td>
+          <td>$${Number(r.amount).toFixed(2)}</td>
+          <td>${gtBadge}</td>
+          <td><span class="status-pill ${r.flagged ? 'flagged' : 'approved'}">${r.flagged ? 'FLAGGED' : 'APPROVED'}</span></td>
+          <td><strong>${Number(r.risk_score).toFixed(3)}</strong></td>
+        </tr>
+      `;
+    }).join('');
   } catch (e) {}
 }
 
@@ -684,7 +724,11 @@ async function submitTransaction(e) {
     const res = await fetch('/api/score', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ features, amount })
+      body: JSON.stringify({
+        features,
+        amount,
+        ground_truth: currentSampleGroundTruth
+      })
     });
     const data = await res.json();
 
@@ -706,8 +750,9 @@ async function submitTransaction(e) {
       statusEl.innerText = 'APPROVED (NORMAL)';
     }
 
-    scoreEl.innerText = data.risk_score.toFixed(3);
-    detailsEl.innerText = `Tx #${data.transaction_id} | Amount: $${data.amount.toFixed(2)} | Isolation Forest Anomaly Score`;
+    scoreEl.innerText = Number(data.risk_score).toFixed(3);
+    const gtText = data.ground_truth === 1 ? 'Kaggle Verified Fraud' : (data.ground_truth === 0 ? 'Kaggle Verified Normal' : 'Custom');
+    detailsEl.innerText = `Tx #${data.transaction_id} | Amount: $${Number(data.amount).toFixed(2)} | Ground Truth: ${gtText}`;
 
     updateStats();
     updateHistory();
@@ -736,13 +781,23 @@ function toggleStream() {
       const type = isFraud ? 'fraud' : 'normal';
       
       try {
-        const sampleRes = await fetch(`/api/sample?type=${type}`);
-        const sample = await sampleRes.json();
+        let sample = null;
+        try {
+          const sampleRes = await fetch(`/api/sample?type=${type}`);
+          if (sampleRes.ok) sample = await sampleRes.json();
+        } catch (e) {}
+        if (!sample || !sample.features) {
+          sample = isFraud ? FALLBACK_FRAUD : FALLBACK_NORMAL;
+        }
         
         await fetch('/api/score', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ features: sample.features, amount: sample.amount })
+          body: JSON.stringify({
+            features: sample.features,
+            amount: sample.amount,
+            ground_truth: sample.is_fraud !== undefined ? sample.is_fraud : (isFraud ? 1 : 0)
+          })
         });
         
         updateStats();
@@ -818,6 +873,7 @@ def api_health():
 
 
 @app.get("/api/sample")
+@app.get("/sample")
 def get_sample(type: str = "random"):
     """
     Returns a sample transaction row from creditcard.csv for live testing.
@@ -846,7 +902,8 @@ def get_score_help():
             "interactive_ui": "Visit /dashboard to score transactions with one click.",
             "post_example": {
                 "features": [0.0] * 29 + [45.00],
-                "amount": 45.00
+                "amount": 45.00,
+                "ground_truth": 0
             }
         }
     )
@@ -874,16 +931,18 @@ def score_transaction(payload: TransactionPayload):
 
     status = "FLAGGED FOR FRAUD" if flagged else "APPROVED (NORMAL)"
     details = "Kaggle PCA Anomaly Outlier" if flagged else "Normal Pattern"
+    gt = payload.ground_truth if payload.ground_truth is not None else payload.is_fraud
 
     # Persist in SQLite
-    tx_id = save_transaction(amount, risk_score, flagged, details)
+    tx_id = save_transaction(amount, risk_score, flagged, details, ground_truth=gt)
 
     return ScoreResponse(
         transaction_id=tx_id,
         amount=round(amount, 2),
         risk_score=risk_score,
         flagged=flagged,
-        status=status
+        status=status,
+        ground_truth=gt
     )
 
 
@@ -895,7 +954,7 @@ def get_history(limit: int = 15):
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             rows = cursor.execute("""
-                SELECT id, timestamp, amount, risk_score, flagged, details
+                SELECT id, timestamp, amount, risk_score, flagged, details, ground_truth
                 FROM transactions
                 ORDER BY id DESC
                 LIMIT ?

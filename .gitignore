@@ -2,9 +2,6 @@
 venv/
 .venv/
 
-# Large Datasets
-creditcard.csv
-*.csv
 
 # Database Artifacts
 *.db
