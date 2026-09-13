@@ -1,6 +1,6 @@
 """
-server.py - FraudGuard Real-Time Scoring API & Live Web Dashboard
------------------------------------------------------------------
+server.py - Fraud Detection API & Live Web Dashboard
+---------------------------------------------------
 Features:
 - Live Interactive Web Dashboard: GET /dashboard, GET /web (and redirect from /)
     - Live Stream Simulator Controller: Stable UI (no layout shift), fixed-width buttons,
@@ -11,7 +11,7 @@ Features:
     Supports both /api/* and root aliases (e.g., /score, /history, /stats, /health).
     Handles GET /score gracefully with instructions instead of 'Method Not Allowed'.
 - Isolation Forest anomaly detection model trained on 'creditcard.csv'.
-- SQLite persistence ('fraudguard.db').
+- SQLite persistence ('fraud_detection.db').
 """
 
 import csv
@@ -28,7 +28,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from pydantic import BaseModel, Field
 from model import FastIsolationForest
 
-DB_FILE = "fraudguard.db"
+DB_FILE = "fraud_detection.db"
 MODEL_FILE = "model.pkl"
 CSV_FILE = "creditcard.csv"
 
@@ -126,7 +126,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="FraudGuard API",
+    title="Fraud Detection API",
     description="Real-Time Transaction Fraud Scoring API & Web Dashboard",
     version="2.5.0",
     lifespan=lifespan
@@ -141,7 +141,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FraudGuard - Live Fraud Detection Dashboard</title>
+<title>Fraud Detection API - Live Dashboard</title>
 <style>
   :root {
     --bg: #0b1120;
@@ -368,7 +368,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <div class="container">
   <header>
     <div>
-      <h1>FraudGuard Dashboard</h1>
+      <h1>Fraud Detection API Dashboard</h1>
       <p style="color: var(--text-muted); font-size: 13px;">Real-Time Transaction Risk Scoring & Testing Console</p>
     </div>
     <span class="badge-live">&#9679; API Online (Port 8000)</span>
@@ -744,7 +744,7 @@ def web_dashboard():
 @app.get("/health")
 def api_health():
     return {
-        "service": "FraudGuard Real-Time Fraud API",
+        "service": "Fraud Detection API",
         "dataset": "Kaggle Credit Card Fraud (creditcard.csv)",
         "model_loaded": model_data is not None,
         "endpoints": [

@@ -1,4 +1,4 @@
-# FraudGuard
+# Fraud Detection API
 
 Real-time transaction risk scoring service trained on the Kaggle Credit Card Fraud benchmark dataset (`creditcard.csv`). Powered by an unsupervised Isolation Forest model and served via FastAPI with SQLite persistence and a live web dashboard.
 
@@ -6,7 +6,7 @@ Real-time transaction risk scoring service trained on the Kaggle Credit Card Fra
 
 ## Dataset Overview
 
-FraudGuard is trained on the Credit Card Fraud detection benchmark from Kaggle:
+The Fraud Detection API is trained on the Credit Card Fraud detection benchmark from Kaggle:
 - Total Transactions: 284,807 recorded over two days.
 - Normal Transactions: 284,315 (99.83%).
 - Confirmed Fraud Cases: 492 (0.17%).
@@ -50,7 +50,7 @@ python3 train.py
 Expected output:
 ```text
 =================================================================
-  FraudGuard - Isolation Forest Training on Kaggle Dataset
+  Fraud Detection API - Isolation Forest Training on Kaggle Dataset
 =================================================================
 Reading 'creditcard.csv' ...
 Total rows in Kaggle dataset: 284,807
@@ -103,7 +103,7 @@ python3 simulator.py --delay 0.5 --fraud-boost
 
 Console output:
 ```text
-FraudGuard - Live Kaggle Dataset Replay Stream
+Fraud Detection API - Live Kaggle Dataset Replay Stream
 Target URL: http://127.0.0.1:8000/api/score (Delay: 0.5s)
 ==================================================================================
 Tx ID   |    Amount | Kaggle Ground Truth   | Model Prediction     | Risk Score
@@ -126,7 +126,7 @@ python3 test_app.py
 Expected output:
 ```text
 =================================================================
-  Running FraudGuard Automated Verification on Kaggle Dataset
+  Running Fraud Detection API Automated Verification on Kaggle Dataset
 =================================================================
 [1/5] Training Isolation Forest on 'creditcard.csv' ... PASSED
 [2/5] Testing GET /dashboard & GET /web ... PASSED
@@ -143,7 +143,7 @@ Expected output:
 ## API Reference
 
 ### POST /api/score
-Calculates fraud risk score for an incoming transaction and logs the result to SQLite (`fraudguard.db`).
+Calculates fraud risk score for an incoming transaction and logs the result to SQLite (`fraud_detection.db`).
 
 Request:
 ```bash
@@ -253,7 +253,7 @@ If a client attempts a `GET` request on `/score`, the service responds with HTTP
 ### The Imbalanced Data Problem
 In the Kaggle credit card dataset, legitimate transactions account for 99.83% of all activity, while confirmed fraudulent transactions represent only 0.17%. A naive classifier predicting every transaction as legitimate achieves 99.83% accuracy while failing entirely at fraud prevention.
 
-Supervised models also tend to overfit historical patterns and perform poorly against emerging, unseen fraud techniques. FraudGuard implements an unsupervised Isolation Forest algorithm that isolates anomalies based on data geometry rather than supervised labels.
+Supervised models also tend to overfit historical patterns and perform poorly against emerging, unseen fraud techniques. The Fraud Detection API implements an unsupervised Isolation Forest algorithm that isolates anomalies based on data geometry rather than supervised labels.
 
 ### Mathematical Formulation
 

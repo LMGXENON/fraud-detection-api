@@ -1,9 +1,9 @@
 """
 simulator.py - Real-Time Kaggle Transaction Replay Simulator
 ------------------------------------------------------------
-Streams real transaction rows from 'creditcard.csv' directly to the FraudGuard API.
+Streams real transaction rows from 'creditcard.csv' directly to the Fraud Detection API.
 - Samples both normal transactions and verified fraud rows from the Kaggle dataset.
-- Compares Kaggle's ground-truth 'Class' (0 vs 1) with FraudGuard's real-time risk score.
+- Compares Kaggle's ground-truth 'Class' (0 vs 1) with Fraud Detection API's real-time risk score.
 - Prints live color-coded evaluations as transactions stream by.
 
 Usage:
@@ -71,7 +71,7 @@ def load_replay_pool(filename, fraud_boost=False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="FraudGuard Kaggle Stream Simulator")
+    parser = argparse.ArgumentParser(description="Fraud Detection API Kaggle Stream Simulator")
     parser.add_argument("--url", default="http://127.0.0.1:8000/api/score", help="Scoring endpoint")
     parser.add_argument("--delay", type=float, default=0.5, help="Seconds between transactions")
     parser.add_argument("--count", type=int, default=None, help="Stop after N transactions")
@@ -80,7 +80,7 @@ def main():
 
     pool = load_replay_pool(CSV_FILE, fraud_boost=args.fraud_boost)
 
-    print(f"\n{CYAN}{BOLD}FraudGuard - Live Kaggle Dataset Replay Stream{RESET}")
+    print(f"\n{CYAN}{BOLD}Fraud Detection API - Live Kaggle Dataset Replay Stream{RESET}")
     print(f"Target URL: {args.url} (Delay: {args.delay}s)")
     print("=" * 82)
     print(f"{'Tx ID':<7} | {'Amount':>9} | {'Kaggle Ground Truth':<21} | {'Model Prediction':<20} | Risk Score")

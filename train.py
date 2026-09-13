@@ -1,6 +1,6 @@
 """
-train.py - FraudGuard Model Training on Kaggle Credit Card Dataset
-------------------------------------------------------------------
+train.py - Fraud Detection API Model Training on Kaggle Credit Card Dataset
+--------------------------------------------------------------------------
 Trains an Isolation Forest anomaly detector on 'creditcard.csv'.
 - Evaluates against the Kaggle ground truth 'Class' label (0 = Normal, 1 = Fraud).
 - Saves the trained model to 'model.pkl'.
@@ -55,7 +55,7 @@ def load_kaggle_data(filename=CSV_FILE, max_normal=5000):
 
 def train():
     print("=" * 65)
-    print("  FraudGuard - Isolation Forest Training on Kaggle Dataset")
+    print("  Fraud Detection API - Isolation Forest Training on Kaggle Dataset")
     print("=" * 65)
 
     X_train, X_fraud = load_kaggle_data(CSV_FILE)

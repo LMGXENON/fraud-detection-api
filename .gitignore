@@ -8,7 +8,9 @@ creditcard.csv
 
 # Model & Database Artifacts
 model.pkl
+*.db
 fraudguard.db
+fraud_detection.db
 
 # Python Cache & Testing
 __pycache__/

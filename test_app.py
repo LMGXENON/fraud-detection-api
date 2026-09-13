@@ -1,6 +1,6 @@
 """
-test_app.py - Automated Verification Suite for FraudGuard
----------------------------------------------------------
+test_app.py - Automated Verification Suite for Fraud Detection API
+-----------------------------------------------------------------
 Verifies:
 1. Training on 'creditcard.csv' and saving 'model.pkl'.
 2. Web Dashboard at GET /dashboard and GET /web.
@@ -21,7 +21,7 @@ from server import app
 
 def run_all_tests():
     print("=" * 65)
-    print("  Running FraudGuard Automated Verification on Kaggle Dataset")
+    print("  Running Fraud Detection API Automated Verification on Kaggle Dataset")
     print("=" * 65)
 
     # 1. Test Model Training
@@ -40,7 +40,7 @@ def run_all_tests():
         print("[2/5] Testing GET /dashboard & GET /web ... ", end="")
         dash_resp = client.get("/dashboard")
         assert dash_resp.status_code == 200
-        assert "FraudGuard Dashboard" in dash_resp.text
+        assert "Fraud Detection API Dashboard" in dash_resp.text
 
         web_resp = client.get("/web")
         assert web_resp.status_code == 200

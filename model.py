@@ -1,6 +1,6 @@
 """
-model.py - FraudGuard Isolation Forest Model
----------------------------------------------
+model.py - Fraud Detection API Isolation Forest Model
+-----------------------------------------------------
 Clean, pure-Python anomaly detection model with zero external binary dependencies.
 Shared between train.py and server.py.
 """
