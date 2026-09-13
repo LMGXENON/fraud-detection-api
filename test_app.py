@@ -1,11 +1,11 @@
 """
-test_app.py - Automated Verification Suite for FraudGuard (Kaggle Dataset)
---------------------------------------------------------------------------
+test_app.py - Automated Verification Suite for FraudGuard
+---------------------------------------------------------
 Verifies:
 1. Training on 'creditcard.csv' and saving 'model.pkl'.
-2. API health check (GET /).
-3. Scoring normal vs fraud transactions from the real Kaggle dataset.
-4. SQLite persistence (GET /history, GET /stats).
+2. Web Dashboard at GET /dashboard and GET /web.
+3. Scoring normal vs fraud transactions at POST /api/score.
+4. SQLite persistence at GET /api/history & GET /api/stats.
 
 Run with:
     python3 test_app.py
@@ -24,7 +24,7 @@ def run_all_tests():
     print("=" * 65)
 
     # 1. Test Model Training
-    print("[1/4] Training Isolation Forest on 'creditcard.csv' ... ")
+    print("[1/5] Training Isolation Forest on 'creditcard.csv' ... ")
     train()
     assert os.path.exists("model.pkl"), "model.pkl was not created!"
     print("      PASSED")
@@ -35,39 +35,49 @@ def run_all_tests():
     fraud_tx_features = fraud_sample[0]
 
     with TestClient(app) as client:
-        # 2. Test Home endpoint (Web Dashboard)
-        print("[2/4] Testing GET / (Web Dashboard) ... ", end="")
-        resp = client.get("/")
-        assert resp.status_code == 200
-        assert "FraudGuard Dashboard" in resp.text
+        # 2. Test Dashboard routes
+        print("[2/5] Testing GET /dashboard & GET /web ... ", end="")
+        dash_resp = client.get("/dashboard")
+        assert dash_resp.status_code == 200
+        assert "FraudGuard Dashboard" in dash_resp.text
+
+        web_resp = client.get("/web")
+        assert web_resp.status_code == 200
         print("PASSED")
 
-        # 3. Test Scoring Normal vs Fraud
-        print("[3/4] Testing POST /score on Kaggle Normal vs Fraud ... ", end="")
-        normal_resp = client.post("/score", json={"features": normal_tx_features})
+        # 3. Test API Health
+        print("[3/5] Testing GET /api/health ... ", end="")
+        health_resp = client.get("/api/health")
+        assert health_resp.status_code == 200
+        assert health_resp.json()["model_loaded"] is True
+        print("PASSED")
+
+        # 4. Test Scoring Normal vs Fraud via /api/score
+        print("[4/5] Testing POST /api/score on Kaggle Normal vs Fraud ... ", end="")
+        normal_resp = client.post("/api/score", json={"features": normal_tx_features})
         assert normal_resp.status_code == 200
         n_data = normal_resp.json()
 
-        fraud_resp = client.post("/score", json={"features": fraud_tx_features})
+        fraud_resp = client.post("/api/score", json={"features": fraud_tx_features})
         assert fraud_resp.status_code == 200
         f_data = fraud_resp.json()
 
         assert f_data["risk_score"] > n_data["risk_score"], "Fraud should score higher risk than normal!"
         print(f"PASSED (Normal Risk: {n_data['risk_score']:.2f}, Fraud Risk: {f_data['risk_score']:.2f})")
 
-        # 4. Test Persistence and Stats
-        print("[4/4] Testing GET /history & GET /stats (SQLite Persistence) ... ", end="")
-        hist_resp = client.get("/history?limit=5")
+        # 5. Test Persistence and Stats via /api/...
+        print("[5/5] Testing GET /api/history & GET /api/stats (SQLite Persistence) ... ", end="")
+        hist_resp = client.get("/api/history?limit=5")
         assert hist_resp.status_code == 200
         assert len(hist_resp.json()) >= 2
 
-        stats_resp = client.get("/stats")
+        stats_resp = client.get("/api/stats")
         assert stats_resp.status_code == 200
         assert stats_resp.json()["total_scored"] >= 2
         print("PASSED")
 
     print("=" * 65)
-    print("  ALL TESTS PASSED! Kaggle dataset integration is 100% verified.")
+    print("  ALL 5 TESTS PASSED! Web & API routing 100% verified.")
     print("=" * 65)
 
 

@@ -72,7 +72,7 @@ def load_replay_pool(filename, fraud_boost=False):
 
 def main():
     parser = argparse.ArgumentParser(description="FraudGuard Kaggle Stream Simulator")
-    parser.add_argument("--url", default="http://127.0.0.1:8000/score", help="Scoring endpoint")
+    parser.add_argument("--url", default="http://127.0.0.1:8000/api/score", help="Scoring endpoint")
     parser.add_argument("--delay", type=float, default=0.5, help="Seconds between transactions")
     parser.add_argument("--count", type=int, default=None, help="Stop after N transactions")
     parser.add_argument("--fraud-boost", action="store_true", help="Inject more fraud rows for demo drama")

@@ -2,10 +2,14 @@
 server.py - FraudGuard Real-Time Scoring API & Live Web Dashboard
 -----------------------------------------------------------------
 Features:
-- Live Web Dashboard at '/' for testing in any browser.
-- REST API endpoints: POST /score, GET /history, GET /stats.
-- Isolation Forest anomaly detection model trained on 'creditcard.csv'.
-- SQLite persistence ('fraudguard.db').
+- Web Dashboard: GET /dashboard, GET /web (and redirect from /)
+- REST API:
+    POST /api/score    - Score transaction
+    GET  /api/history  - Recent scored transactions
+    GET  /api/stats    - System summary metrics
+    GET  /api/health   - Service status
+- Isolation Forest anomaly detection model trained on 'creditcard.csv'
+- SQLite persistence ('fraudguard.db')
 """
 
 import sqlite3
@@ -15,7 +19,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from model import FastIsolationForest
 
@@ -95,7 +99,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="FraudGuard API",
     description="Real-Time Transaction Fraud Scoring API",
-    version="2.2.0",
+    version="2.3.0",
     lifespan=lifespan
 )
 
@@ -209,7 +213,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   }
   textarea { height: 90px; resize: vertical; }
 
-  /* Result Box */
   .result-box {
     margin-top: 16px;
     padding: 16px;
@@ -222,7 +225,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   .result-title { font-size: 14px; font-weight: 700; }
   .result-score { font-size: 20px; font-weight: 700; }
 
-  /* History Table */
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--card-border); }
   th { color: var(--text-muted); font-size: 12px; font-weight: 600; text-transform: uppercase; }
@@ -243,12 +245,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <header>
     <div>
       <h1>FraudGuard Dashboard</h1>
-      <p style="color: var(--text-muted); font-size: 13px;">Real-Time Kaggle Transaction Risk Scoring API</p>
+      <p style="color: var(--text-muted); font-size: 13px;">Real-Time Transaction Risk Scoring API (/api/score)</p>
     </div>
     <span class="badge-live">&#9679; API Live (Port 8000)</span>
   </header>
 
-  <!-- Metrics Cards -->
   <div class="grid-stats">
     <div class="stat-card">
       <div class="label">Total Transactions Scored</div>
@@ -269,7 +270,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </div>
 
   <div class="main-grid">
-    <!-- Test Transaction Card -->
     <div class="card">
       <h2>Interactive Transaction Tester</h2>
       <div class="btn-group">
@@ -296,7 +296,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
-    <!-- Recent History Card -->
     <div class="card">
       <h2>Recent Scored Transactions</h2>
       <table>
@@ -317,7 +316,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </div>
 
 <script>
-// Sample Kaggle Feature Vectors
 const sampleNormal = [0.0, -1.359, -0.072, 2.536, 1.378, -0.338, 0.462, 0.239, 0.098, 0.363, 0.090, -0.551, -0.617, -0.991, -0.311, 1.468, -0.470, 0.207, 0.025, 0.403, 0.251, -0.018, 0.277, -0.110, 0.066, 0.128, -0.189, 0.133, -0.021, 45.00];
 const sampleFraud = [406.0, -2.312, 1.951, -1.609, 3.997, -0.522, -1.426, -2.537, 1.391, -2.770, -2.772, 3.202, -2.899, -0.595, -4.289, 0.389, -1.140, -2.830, -0.016, 0.416, 0.126, 0.517, -0.035, -0.465, 0.320, 0.044, 0.177, 0.261, -0.143, 239.93];
 
@@ -327,12 +325,11 @@ function loadSample(isFraud) {
   document.getElementById('txAmount').value = sample[sample.length - 1];
 }
 
-// Initial load
 loadSample(false);
 
 async function updateStats() {
   try {
-    const res = await fetch('/stats');
+    const res = await fetch('/api/stats');
     if (!res.ok) return;
     const data = await res.json();
     document.getElementById('stat-total').innerText = data.total_scored;
@@ -344,7 +341,7 @@ async function updateStats() {
 
 async function updateHistory() {
   try {
-    const res = await fetch('/history?limit=8');
+    const res = await fetch('/api/history?limit=8');
     if (!res.ok) return;
     const rows = await res.json();
     const tbody = document.getElementById('historyTable');
@@ -377,7 +374,7 @@ async function submitTransaction(e) {
   }
 
   try {
-    const res = await fetch('/score', {
+    const res = await fetch('/api/score', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ features, amount })
@@ -412,7 +409,6 @@ async function submitTransaction(e) {
   }
 }
 
-// Polling interval
 updateStats();
 updateHistory();
 setInterval(() => {
@@ -427,15 +423,36 @@ setInterval(() => {
 
 
 # ---------------------------------------------------------------------------
-# API Routes
+# Web Dashboard Routes
 # ---------------------------------------------------------------------------
-@app.get("/", response_class=HTMLResponse)
-def dashboard():
-    """Serves the interactive live web dashboard."""
+@app.get("/", include_in_schema=False)
+def root_redirect():
+    """Redirect root path to /dashboard."""
+    return RedirectResponse(url="/dashboard")
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+@app.get("/web", response_class=HTMLResponse)
+def web_dashboard():
+    """Serves the live interactive dashboard."""
     return HTMLResponse(content=DASHBOARD_HTML)
 
 
-@app.post("/score", response_model=ScoreResponse)
+# ---------------------------------------------------------------------------
+# API Endpoints (/api/...)
+# ---------------------------------------------------------------------------
+@app.get("/api/health")
+@app.get("/api")
+def api_health():
+    return {
+        "service": "FraudGuard Real-Time Fraud API",
+        "dataset": "Kaggle Credit Card Fraud (creditcard.csv)",
+        "model_loaded": model_data is not None,
+        "endpoints": ["POST /api/score", "GET /api/history", "GET /api/stats"]
+    }
+
+
+@app.post("/api/score", response_model=ScoreResponse)
 def score_transaction(payload: TransactionPayload):
     if model_data is None:
         raise HTTPException(status_code=503, detail="Model not loaded. Run: python3 train.py")
@@ -469,7 +486,7 @@ def score_transaction(payload: TransactionPayload):
     )
 
 
-@app.get("/history")
+@app.get("/api/history")
 def get_history(limit: int = 15):
     with sqlite3.connect(DB_FILE) as conn:
         conn.row_factory = sqlite3.Row
@@ -483,7 +500,7 @@ def get_history(limit: int = 15):
         return [dict(r) for r in rows]
 
 
-@app.get("/stats")
+@app.get("/api/stats")
 def get_stats():
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()

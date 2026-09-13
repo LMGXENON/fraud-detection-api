@@ -80,7 +80,7 @@ Start the FastAPI application:
 python3 -m uvicorn server:app --port 8000
 ```
 
-- Web Dashboard: http://127.0.0.1:8000/
+- Web Dashboard: http://127.0.0.1:8000/dashboard (or http://127.0.0.1:8000/web)
 - Interactive API Documentation (Swagger UI): http://127.0.0.1:8000/docs
 - Alternative API Documentation (ReDoc): http://127.0.0.1:8000/redoc
 
@@ -96,7 +96,7 @@ python3 simulator.py --delay 0.5 --fraud-boost
 Console output:
 ```text
 FraudGuard - Live Kaggle Dataset Replay Stream
-Target URL: http://127.0.0.1:8000/score (Delay: 0.5s)
+Target URL: http://127.0.0.1:8000/api/score (Delay: 0.5s)
 ==================================================================================
 Tx ID   |    Amount | Kaggle Ground Truth   | Model Prediction     | Risk Score
 ----------------------------------------------------------------------------------
@@ -120,12 +120,13 @@ Expected output:
 =================================================================
   Running FraudGuard Automated Verification on Kaggle Dataset
 =================================================================
-[1/4] Training Isolation Forest on 'creditcard.csv' ... PASSED
-[2/4] Testing GET / (Service Health) ... PASSED
-[3/4] Testing POST /score on Kaggle Normal vs Fraud ... PASSED
-[4/4] Testing GET /history & GET /stats (SQLite Persistence) ... PASSED
+[1/5] Training Isolation Forest on 'creditcard.csv' ... PASSED
+[2/5] Testing GET /dashboard & GET /web ... PASSED
+[3/5] Testing GET /api/health ... PASSED
+[4/5] Testing POST /api/score on Kaggle Normal vs Fraud ... PASSED
+[5/5] Testing GET /api/history & GET /api/stats ... PASSED
 =================================================================
-  ALL TESTS PASSED! Kaggle dataset integration is 100% verified.
+  ALL 5 TESTS PASSED! Web & API routing 100% verified.
 =================================================================
 ```
 
@@ -133,12 +134,12 @@ Expected output:
 
 ## API Reference
 
-### POST /score
+### POST /api/score
 Calculates fraud risk score for an incoming transaction and logs the result to SQLite (`fraudguard.db`).
 
 Request:
 ```bash
-curl -s -X POST http://127.0.0.1:8000/score \
+curl -s -X POST http://127.0.0.1:8000/api/score \
   -H "Content-Type: application/json" \
   -d '{
     "features": [0.0, -1.359, -0.072, 2.536, 1.378, -0.338, 0.462, 0.239, 0.098, 0.363, 0.090, -0.551, -0.617, -0.991, -0.311, 1.468, -0.470, 0.207, 0.025, 0.403, 0.251, -0.018, 0.277, -0.110, 0.066, 0.128, -0.189, 0.133, -0.021, 149.62]
@@ -158,18 +159,18 @@ Response:
 
 ---
 
-### GET /history
+### GET /api/history
 Retrieves the most recent scored transactions.
 ```bash
-curl -s "http://127.0.0.1:8000/history?limit=5" | python3 -m json.tool
+curl -s "http://127.0.0.1:8000/api/history?limit=5" | python3 -m json.tool
 ```
 
 ---
 
-### GET /stats
+### GET /api/stats
 Returns aggregate scoring statistics across all recorded transactions.
 ```bash
-curl -s http://127.0.0.1:8000/stats | python3 -m json.tool
+curl -s http://127.0.0.1:8000/api/stats | python3 -m json.tool
 ```
 
 Response:
